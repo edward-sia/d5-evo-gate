@@ -87,39 +87,18 @@ final class GateBLEManager: NSObject, ObservableObject {
         }
     }
 
-    func authenticate(pin: String) {
-        guard authStatus != "disabled" else {
-            message = "Protection is turned off on the controller."
-            return
-        }
-
-        guard authStatus != "authorized" else {
-            message = "This iPhone is already unlocked."
-            return
-        }
-
-        let trimmedPin = pin.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedPin.isEmpty else {
-            message = "Enter your passphrase first."
-            return
-        }
-
-        requestAuthentication(pin: trimmedPin, triggerAfterAuth: false)
-    }
-
-    func triggerGate(pin: String) {
+    func triggerGate() {
         if authStatus == "disabled" || authStatus == "authorized" {
             enqueueWrite("TRIGGER")
             return
         }
 
-        let trimmedPin = pin.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedPin.isEmpty else {
-            message = "Enter your passphrase first."
+        guard !Self.localAuthPin.isEmpty else {
+            message = "This build does not include a local unlock phrase."
             return
         }
 
-        requestAuthentication(pin: trimmedPin, triggerAfterAuth: true)
+        requestAuthentication(pin: Self.localAuthPin, triggerAfterAuth: true)
     }
 
     func refreshStatus() {
@@ -352,6 +331,11 @@ final class GateBLEManager: NSObject, ObservableObject {
 
         let responseHex = digest.map { String(format: "%02X", $0) }.joined()
         return "AUTHRESP \(responseHex)"
+    }
+
+    private static var localAuthPin: String {
+        (Bundle.main.object(forInfoDictionaryKey: "D5EVOAuthPin") as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
     }
 }
 

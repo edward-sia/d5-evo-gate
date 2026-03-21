@@ -1,0 +1,4 @@
+D5EVO_AUTH_PIN =
+#include? "LocalSecrets.xcconfig"
+
+INFOPLIST_KEY_D5EVOAuthPin = $(D5EVO_AUTH_PIN)

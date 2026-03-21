@@ -1,17 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">D5-EVO Gate</string>
+    <string name="app_name">Newhaven</string>
     <string name="subtitle">ESP32 38-pin USB-C local Bluetooth trigger for a Centurion D5-Evo gate motor.</string>
     <string name="label_connection">Connection</string>
     <string name="label_controller_status">Controller status</string>
     <string name="label_auth_status">Auth status</string>
     <string name="label_info">Device info</string>
     <string name="label_message">Last message</string>
-    <string name="hint_pin">PIN or passphrase from app_config_local.h (not stored)</string>
     <string name="hint_bench">Bench test first: the relay should click for about half a second when triggered.</string>
     <string name="action_connect">Connect</string>
-    <string name="action_authenticate">Authenticate</string>
-    <string name="action_trigger">Trigger Gate</string>
+    <string name="action_trigger">Open Gate</string>
     <string name="action_refresh">Refresh Status</string>
     <string name="action_disconnect">Disconnect</string>
     <string name="status_unknown">unknown</string>

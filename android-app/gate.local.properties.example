@@ -1,0 +1,3 @@
+# Copy this file to gate.local.properties and keep the real value local only.
+# This file is ignored by git.
+gate.auth.pin=CHANGE-ME

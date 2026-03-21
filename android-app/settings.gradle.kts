@@ -14,5 +14,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "D5EvoBleGate"
+rootProject.name = "Newhaven"
 include(":app")

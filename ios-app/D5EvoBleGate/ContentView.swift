@@ -2,19 +2,12 @@ import SwiftUI
 
 struct ContentView: View {
     @EnvironmentObject private var bleManager: GateBLEManager
-    @State private var authPin = ""
-    @State private var revealsPassphrase = false
-    @FocusState private var isPassphraseFocused: Bool
 
     var body: some View {
         NavigationStack {
             VStack(spacing: 24) {
                 statusStrip
                 primaryCard
-
-                if showsPassphrase {
-                    passphraseCard
-                }
 
                 if !bleManager.message.isEmpty {
                     Text(bleManager.message)
@@ -29,7 +22,7 @@ struct ContentView: View {
             .padding(24)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             .background(Color(.systemGroupedBackground))
-            .navigationTitle("Gate")
+            .navigationTitle("Newhaven")
             .navigationBarTitleDisplayMode(.large)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
@@ -75,41 +68,6 @@ struct ContentView: View {
         .clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
     }
 
-    private var passphraseCard: some View {
-        VStack(spacing: 14) {
-            HStack(spacing: 12) {
-                Group {
-                    if revealsPassphrase {
-                        TextField("Passphrase", text: $authPin)
-                    } else {
-                        SecureField("Passphrase", text: $authPin)
-                    }
-                }
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .privacySensitive()
-                .focused($isPassphraseFocused)
-
-                Button(revealsPassphrase ? "Hide" : "Show") {
-                    revealsPassphrase.toggle()
-                }
-                .buttonStyle(.borderless)
-                .foregroundStyle(.secondary)
-            }
-
-            Button("Unlock") {
-                isPassphraseFocused = false
-                bleManager.authenticate(pin: authPin)
-            }
-            .buttonStyle(.bordered)
-            .disabled(!bleManager.isConnected)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(18)
-        .background(.background)
-        .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
-    }
-
     private func compactStatus(title: String, presentation: StatusPresentation) -> some View {
         VStack(spacing: 6) {
             Text(title)
@@ -126,10 +84,6 @@ struct ContentView: View {
         .padding(.vertical, 12)
         .background(.background)
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-    }
-
-    private var showsPassphrase: Bool {
-        bleManager.authStatus != "disabled"
     }
 
     private var primaryTitle: String {
@@ -187,10 +141,8 @@ struct ContentView: View {
     }
 
     private func primaryAction() {
-        isPassphraseFocused = false
-
         if bleManager.isConnected {
-            bleManager.triggerGate(pin: authPin)
+            bleManager.triggerGate()
         } else {
             bleManager.startScanAndConnect()
         }

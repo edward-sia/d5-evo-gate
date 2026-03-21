@@ -4,9 +4,11 @@
 .vscode/launch.json
 .vscode/ipch
 include/app_config_local.h
+android-app/gate.local.properties
 android-app/.gradle/
 android-app/build/
 android-app/app/build/
+ios-app/D5EvoBleGate/Config/LocalSecrets.xcconfig
 ios-app/**/xcuserdata/
 ios-app/**/*.xcuserstate
 .DS_Store

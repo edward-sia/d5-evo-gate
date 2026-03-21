@@ -1,18 +1,39 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
 }
 
+val gateLocalProperties = Properties().apply {
+    val file = rootProject.file("gate.local.properties")
+    if (file.exists()) {
+        file.inputStream().use(::load)
+    }
+}
+
+fun String.escapeForBuildConfig(): String =
+    replace("\\", "\\\\").replace("\"", "\\\"")
+
 android {
-    namespace = "au.com.queenie.d5evogate"
+    namespace = "com.newhaven.gate"
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "au.com.queenie.d5evogate"
+        applicationId = "com.newhaven.gate"
         minSdk = 26
         targetSdk = 34
         versionCode = 1
         versionName = "1.0"
+        buildConfigField(
+            "String",
+            "GATE_AUTH_PIN",
+            "\"${(gateLocalProperties.getProperty("gate.auth.pin") ?: "").escapeForBuildConfig()}\"",
+        )
+    }
+
+    buildFeatures {
+        buildConfig = true
     }
 
     buildTypes {

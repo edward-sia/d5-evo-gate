@@ -1,4 +1,4 @@
-package au.com.queenie.d5evogate
+package com.newhaven.gate
 
 import android.Manifest
 import android.annotation.SuppressLint
@@ -21,7 +21,6 @@ import android.os.Handler
 import android.os.Looper
 import android.os.ParcelUuid
 import android.widget.Button
-import android.widget.EditText
 import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
@@ -44,9 +43,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var authValue: TextView
     private lateinit var infoValue: TextView
     private lateinit var messageValue: TextView
-    private lateinit var pinInput: EditText
     private lateinit var connectButton: Button
-    private lateinit var authenticateButton: Button
     private lateinit var triggerButton: Button
     private lateinit var refreshButton: Button
     private lateinit var disconnectButton: Button
@@ -212,9 +209,7 @@ class MainActivity : AppCompatActivity() {
         authValue = findViewById(R.id.authValue)
         infoValue = findViewById(R.id.infoValue)
         messageValue = findViewById(R.id.messageValue)
-        pinInput = findViewById(R.id.pinInput)
         connectButton = findViewById(R.id.connectButton)
-        authenticateButton = findViewById(R.id.authenticateButton)
         triggerButton = findViewById(R.id.triggerButton)
         refreshButton = findViewById(R.id.refreshButton)
         disconnectButton = findViewById(R.id.disconnectButton)
@@ -228,10 +223,6 @@ class MainActivity : AppCompatActivity() {
             } else {
                 permissionLauncher.launch(requiredPermissions())
             }
-        }
-
-        authenticateButton.setOnClickListener {
-            authenticate()
         }
 
         triggerButton.setOnClickListener {
@@ -253,41 +244,18 @@ class MainActivity : AppCompatActivity() {
         disconnectGatt()
     }
 
-    private fun authenticate() {
-        val pin = pinInput.text.toString().trim()
-        when (authValue.text.toString()) {
-            "disabled" -> {
-                setMessage("Authentication is disabled in the firmware.")
-                return
-            }
-
-            "authorized" -> {
-                setMessage("This phone is already authorized.")
-                return
-            }
-        }
-
-        if (pin.isEmpty()) {
-            setMessage("Enter the auth PIN or passphrase first.")
-            return
-        }
-
-        requestAuthentication(pin = pin, triggerAfterAuth = false)
-    }
-
     private fun triggerGate() {
-        val pin = pinInput.text.toString().trim()
         if (authValue.text.toString() == "disabled" || authValue.text.toString() == "authorized") {
             enqueueCommand("TRIGGER")
             return
         }
 
-        if (pin.isEmpty()) {
-            setMessage("Enter the auth PIN or passphrase first.")
+        if (BuildConfig.GATE_AUTH_PIN.isBlank()) {
+            setMessage("This build does not include a local unlock phrase.")
             return
         }
 
-        requestAuthentication(pin = pin, triggerAfterAuth = true)
+        requestAuthentication(pin = BuildConfig.GATE_AUTH_PIN, triggerAfterAuth = true)
     }
 
     private fun requestAuthentication(pin: String, triggerAfterAuth: Boolean) {
@@ -425,7 +393,6 @@ class MainActivity : AppCompatActivity() {
     private fun updateButtonState() {
         val connected = bluetoothGatt != null && commandCharacteristic != null
         connectButton.isEnabled = !scanInProgress && !connected
-        authenticateButton.isEnabled = connected
         triggerButton.isEnabled = connected
         refreshButton.isEnabled = connected
         disconnectButton.isEnabled = scanInProgress || connected
