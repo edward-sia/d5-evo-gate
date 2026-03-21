@@ -2,20 +2,32 @@
 #include <BLE2902.h>
 #include <BLEDevice.h>
 #include <BLEServer.h>
+#include <esp_system.h>
+#include <mbedtls/sha256.h>
 
 #include "app_config.h"
 
 namespace {
 
+constexpr char kAuthVersionLabel[] = "D5-EVO-AUTH-V1|";
+constexpr size_t kAuthChallengeBytes = 16;
+constexpr size_t kAuthDigestBytes = 32;
+constexpr uint16_t kAuthHashRounds = 2048;
+constexpr char kHexDigits[] = "0123456789ABCDEF";
+
 BLECharacteristic* g_controllerStatusChar = nullptr;
 BLECharacteristic* g_authStatusChar = nullptr;
+BLECharacteristic* g_authChallengeChar = nullptr;
+BLECharacteristic* g_infoChar = nullptr;
 bool g_deviceConnected = false;
 bool g_relayActive = false;
 unsigned long g_relayStartedAtMs = 0;
 unsigned long g_cooldownUntilMs = 0;
 unsigned long g_authorizedUntilMs = 0;
+unsigned long g_authLockoutUntilMs = 0;
 String g_controllerStatus = "booting";
 String g_authStatus = "disabled";
+String g_authChallengeHex = "disabled";
 
 int relayInactiveLevel() {
   return AppConfig::kRelayActiveLevel == HIGH ? LOW : HIGH;
@@ -29,10 +41,93 @@ bool authWindowActive(unsigned long nowMs) {
   return authEnabled() && nowMs < g_authorizedUntilMs;
 }
 
+bool authLockoutActive(unsigned long nowMs) {
+  return authEnabled() && nowMs < g_authLockoutUntilMs;
+}
+
 void notifyIfConnected(BLECharacteristic* characteristic) {
   if (g_deviceConnected && characteristic != nullptr) {
     characteristic->notify();
   }
+}
+
+String hexEncode(const uint8_t* bytes, size_t size) {
+  String output;
+  output.reserve(size * 2);
+  for (size_t index = 0; index < size; ++index) {
+    output += kHexDigits[(bytes[index] >> 4) & 0x0F];
+    output += kHexDigits[bytes[index] & 0x0F];
+  }
+  return output;
+}
+
+bool appendSha256(mbedtls_sha256_context& context, const uint8_t* data, size_t size) {
+  return size == 0 || mbedtls_sha256_update_ret(&context, data, size) == 0;
+}
+
+bool sha256Digest(const uint8_t* firstData, size_t firstSize, const uint8_t* secondData,
+                  size_t secondSize, const uint8_t* thirdData, size_t thirdSize,
+                  uint8_t output[kAuthDigestBytes]) {
+  mbedtls_sha256_context context;
+  mbedtls_sha256_init(&context);
+
+  bool ok = mbedtls_sha256_starts_ret(&context, 0) == 0 &&
+            appendSha256(context, firstData, firstSize) &&
+            appendSha256(context, secondData, secondSize) &&
+            appendSha256(context, thirdData, thirdSize) &&
+            mbedtls_sha256_finish_ret(&context, output) == 0;
+
+  mbedtls_sha256_free(&context);
+  return ok;
+}
+
+String computeAuthResponseHex(const char* pin, const String& challengeHex) {
+  const uint8_t* labelBytes = reinterpret_cast<const uint8_t*>(kAuthVersionLabel);
+  const auto labelSize = strlen(kAuthVersionLabel);
+  const uint8_t* pinBytes = reinterpret_cast<const uint8_t*>(pin);
+  const auto pinSize = strlen(pin);
+  const String uppercaseChallenge = challengeHex;
+  const uint8_t* challengeBytes =
+      reinterpret_cast<const uint8_t*>(uppercaseChallenge.c_str());
+  const auto challengeSize = uppercaseChallenge.length();
+
+  uint8_t digest[kAuthDigestBytes] = {0};
+  if (!sha256Digest(labelBytes, labelSize, pinBytes, pinSize, challengeBytes, challengeSize,
+                    digest)) {
+    return "";
+  }
+
+  for (uint16_t round = 1; round < kAuthHashRounds; ++round) {
+    if (!sha256Digest(digest, sizeof(digest), pinBytes, pinSize, challengeBytes, challengeSize,
+                      digest)) {
+      return "";
+    }
+  }
+
+  return hexEncode(digest, sizeof(digest));
+}
+
+void updateAuthChallengeValue() {
+  if (g_authChallengeChar != nullptr) {
+    g_authChallengeChar->setValue(g_authChallengeHex.c_str());
+  }
+}
+
+void refreshInfoValue() {
+  if (g_infoChar == nullptr) {
+    return;
+  }
+
+  String value;
+  if (!authEnabled()) {
+    value = "Write TRIGGER";
+  } else if (authLockoutActive(millis())) {
+    value = "Wait for auth retry window, then read challenge again";
+  } else {
+    value = "Read challenge, write AUTHRESP <hex>, then TRIGGER";
+  }
+
+  g_infoChar->setValue(value.c_str());
 }
 
 void setControllerStatus(const String& value, bool notify = true) {
@@ -54,20 +149,47 @@ void setAuthStatus(const String& value, bool notify = true) {
       notifyIfConnected(g_authStatusChar);
     }
   }
+  refreshInfoValue();
   Serial.printf("Auth status: %s\n", value.c_str());
+}
+
+void generateAuthChallenge() {
+  if (!authEnabled()) {
+    g_authChallengeHex = "disabled";
+    updateAuthChallengeValue();
+    refreshInfoValue();
+    return;
+  }
+
+  uint8_t challengeBytes[kAuthChallengeBytes] = {0};
+  esp_fill_random(challengeBytes, sizeof(challengeBytes));
+  g_authChallengeHex = hexEncode(challengeBytes, sizeof(challengeBytes));
+  updateAuthChallengeValue();
+  refreshInfoValue();
+  Serial.println("Auth challenge rotated");
 }
 
 void syncAuthStatus(bool notify = true) {
   if (!authEnabled()) {
     if (g_authStatus != "disabled") {
       setAuthStatus("disabled", notify);
+    } else {
+      refreshInfoValue();
     }
     return;
   }
 
-  const String next = authWindowActive(millis()) ? "authorized" : "required";
+  const unsigned long nowMs = millis();
+  if (g_authStatus == "denied" && authLockoutActive(nowMs)) {
+    refreshInfoValue();
+    return;
+  }
+
+  const String next = authWindowActive(nowMs) ? "authorized" : "required";
   if (g_authStatus != next) {
     setAuthStatus(next, notify);
+  } else {
+    refreshInfoValue();
   }
 }
 
@@ -96,36 +218,50 @@ bool triggerRelay() {
   return true;
 }
 
-bool authenticateSession(const String& pin) {
+bool authenticateSession(String responseHex) {
   if (!authEnabled()) {
     syncAuthStatus();
     return true;
   }
 
-  if (pin == AppConfig::kAuthPin) {
+  if (authLockoutActive(millis())) {
+    setAuthStatus("denied");
+    return false;
+  }
+
+  responseHex.trim();
+  responseHex.toUpperCase();
+
+  const String expectedResponse = computeAuthResponseHex(AppConfig::kAuthPin, g_authChallengeHex);
+  generateAuthChallenge();
+
+  if (expectedResponse.length() > 0 && responseHex == expectedResponse) {
     g_authorizedUntilMs = millis() + AppConfig::kAuthSessionMs;
+    g_authLockoutUntilMs = 0;
     setAuthStatus("authorized");
     return true;
   }
 
   g_authorizedUntilMs = 0;
+  g_authLockoutUntilMs = millis() + AppConfig::kAuthLockoutMs;
   setAuthStatus("denied");
   return false;
 }
 
-String normalizedCommand(const std::string& raw) {
+String trimmedCommand(const std::string& raw) {
   String command = String(raw.c_str());
   command.trim();
-  command.toUpperCase();
   return command;
 }
 
-String extractAuthPin(const String& command) {
-  if (command.startsWith("AUTH ")) {
-    return command.substring(5);
+String extractArgument(const String& command, const String& prefix) {
+  if (!command.startsWith(prefix)) {
+    return "";
   }
 
-  return "";
+  String argument = command.substring(prefix.length());
+  argument.trim();
+  return argument;
 }
 
 class GateServerCallbacks : public BLEServerCallbacks {
@@ -133,6 +269,9 @@ class GateServerCallbacks : public BLEServerCallbacks {
   void onConnect(BLEServer* server) override {
     g_deviceConnected = true;
     (void)server;
+    g_authorizedUntilMs = 0;
+    g_authLockoutUntilMs = 0;
+    generateAuthChallenge();
     setControllerStatus(g_controllerStatus, false);
     syncAuthStatus(false);
     notifyIfConnected(g_authStatusChar);
@@ -142,7 +281,9 @@ class GateServerCallbacks : public BLEServerCallbacks {
   void onDisconnect(BLEServer* server) override {
     g_deviceConnected = false;
     g_authorizedUntilMs = 0;
+    g_authLockoutUntilMs = 0;
     syncAuthStatus(false);
+    generateAuthChallenge();
     delay(150);
     server->getAdvertising()->start();
     Serial.println("BLE client disconnected");
@@ -152,16 +293,18 @@ class GateServerCallbacks : public BLEServerCallbacks {
 class CommandCallbacks : public BLECharacteristicCallbacks {
  public:
   void onWrite(BLECharacteristic* characteristic) override {
-    const String command = normalizedCommand(characteristic->getValue());
-    Serial.printf("Command received: %s\n", command.c_str());
+    const String command = trimmedCommand(characteristic->getValue());
+    String normalized = command;
+    normalized.toUpperCase();
+    Serial.printf("Command received: %s\n", normalized.c_str());
 
-    const String authPin = extractAuthPin(command);
-    if (authPin.length() > 0 || command == "AUTH") {
-      authenticateSession(authPin);
+    const String authResponse = extractArgument(normalized, "AUTHRESP ");
+    if (authResponse.length() > 0) {
+      authenticateSession(authResponse);
       return;
     }
 
-    if (command == "TRIGGER") {
+    if (normalized == "TRIGGER") {
       if (authEnabled() && !authWindowActive(millis())) {
         setControllerStatus("locked");
         syncAuthStatus();
@@ -193,10 +336,12 @@ void initBle() {
   g_controllerStatusChar->addDescriptor(new BLE2902());
   g_controllerStatusChar->setValue(g_controllerStatus.c_str());
 
-  BLECharacteristic* infoChar = service->createCharacteristic(
-      AppConfig::kInfoCharUuid, BLECharacteristic::PROPERTY_READ);
-  infoChar->setValue(authEnabled() ? "Write AUTH <pin>, then TRIGGER"
-                                   : "Write TRIGGER");
+  g_authChallengeChar = service->createCharacteristic(
+      AppConfig::kAuthChallengeCharUuid, BLECharacteristic::PROPERTY_READ);
+  g_authChallengeChar->setValue(g_authChallengeHex.c_str());
+
+  g_infoChar =
+      service->createCharacteristic(AppConfig::kInfoCharUuid, BLECharacteristic::PROPERTY_READ);
 
   g_authStatusChar = service->createCharacteristic(
       AppConfig::kAuthStatusCharUuid,
@@ -204,6 +349,8 @@ void initBle() {
   g_authStatusChar->addDescriptor(new BLE2902());
   g_authStatusChar->setValue(g_authStatus.c_str());
 
+  generateAuthChallenge();
+  refreshInfoValue();
   service->start();
 
   BLEAdvertising* advertising = BLEDevice::getAdvertising();
@@ -234,8 +381,7 @@ void updateCooldown() {
     return;
   }
 
-  const unsigned long nowMs = millis();
-  if (cooldownActive(nowMs)) {
+  if (cooldownActive(millis())) {
     return;
   }
 
@@ -244,16 +390,12 @@ void updateCooldown() {
   }
 }
 
-void updateAuthWindow() {
+void updateAuthState() {
   if (!authEnabled()) {
     return;
   }
 
-  if (g_authStatus != "authorized") {
-    return;
-  }
-
-  if (authWindowActive(millis())) {
+  if (g_authStatus == "authorized" && authWindowActive(millis())) {
     return;
   }
 
@@ -269,8 +411,12 @@ void printStartupSummary() {
                 AppConfig::kRelayActiveLevel == LOW ? "active-low" : "active-high");
   Serial.printf("Relay pulse: %lu ms\n", AppConfig::kRelayPulseMs);
   Serial.printf("Cooldown: %lu ms\n", AppConfig::kCooldownMs);
-  Serial.printf("Authentication: %s\n", authEnabled() ? "enabled" : "disabled");
-  Serial.println("Bench test flow: connect phone app -> trigger relay -> hear relay click");
+  Serial.printf("Authentication: %s\n", authEnabled() ? "challenge-response" : "disabled");
+  if (authEnabled()) {
+    Serial.printf("Auth session: %lu ms\n", AppConfig::kAuthSessionMs);
+    Serial.printf("Auth lockout: %lu ms\n", AppConfig::kAuthLockoutMs);
+  }
+  Serial.println("Bench test flow: connect phone app -> authenticate -> trigger relay");
 }
 
 }  // namespace
@@ -291,6 +437,6 @@ void setup() {
 void loop() {
   updateRelayPulse();
   updateCooldown();
-  updateAuthWindow();
+  updateAuthState();
   delay(10);
 }

@@ -82,9 +82,11 @@ Neither breadboard is recommended as the final installed gate controller assembl
 The ESP32 firmware:
 
 - advertises as `D5-EVO-Gate` by default
-- exposes one BLE command path for `AUTH <pin>` and `TRIGGER`
+- exposes one BLE command path for `AUTHRESP <hex>` and `TRIGGER`
+- exposes a dedicated auth challenge characteristic so the phone can sign the challenge locally
 - pulses the relay for `500 ms`
 - enforces a `5 second` cooldown
+- enforces an auth retry lockout after failed auth attempts
 - publishes controller status and auth status over BLE
 
 Controller status values:
@@ -113,13 +115,22 @@ Characteristics:
 
 - Command: `4b8c2ec4-3f66-4f00-8a43-95f79d2c0cc2`
 - Controller status: `4b8c2ec4-3f66-4f00-8a43-95f79d2c0cc3`
+- Auth challenge: `4b8c2ec4-3f66-4f00-8a43-95f79d2c0cc4`
 - Info: `4b8c2ec4-3f66-4f00-8a43-95f79d2c0cc5`
 - Auth status: `4b8c2ec4-3f66-4f00-8a43-95f79d2c0cc6`
 
 Supported write commands:
 
-- `AUTH <pin>`
+- `AUTHRESP <hex>`
 - `TRIGGER`
+
+Auth protocol:
+
+- set `D5_EVO_AUTH_PIN` to a strong PIN or passphrase in `app_config_local.h`
+- the phone reads the auth challenge characteristic
+- the phone computes a local `SHA-256` based response over the challenge and your PIN or passphrase
+- the phone writes `AUTHRESP <hex>`
+- the raw PIN or passphrase is not sent over BLE
 
 ## Configuration
 
@@ -131,9 +142,10 @@ The project is configured specifically for the 38-pin USB-C ESP32 board and the 
 Use local overrides instead of editing the shared defaults:
 
 1. Copy [`app_config_local.example.h`](/Users/queenie/repos/chat/d5-evo-ble-gate/include/app_config_local.example.h) to `include/app_config_local.h`.
-2. Set `D5_EVO_AUTH_PIN` to your own value.
+2. Set `D5_EVO_AUTH_PIN` to a strong PIN or passphrase of your own.
 3. Optionally change `D5_EVO_DEVICE_NAME`.
-4. Only change `D5_EVO_RELAY_ACTIVE_LEVEL` if your relay energizes immediately on boot.
+4. Optionally tune `D5_EVO_AUTH_SESSION_MS` and `D5_EVO_AUTH_LOCKOUT_MS`.
+5. Only change `D5_EVO_RELAY_ACTIVE_LEVEL` if your relay energizes immediately on boot.
 
 The firmware automatically includes `app_config_local.h` when present.
 
@@ -165,8 +177,8 @@ Do this before any connection to the D5-Evo:
 4. Flash the ESP32 firmware.
 5. Open the Android or iPhone app.
 6. Connect to the BLE device.
-7. Authenticate if you enabled a PIN.
-8. Tap `Trigger Gate`.
+7. If you enabled auth, enter the same PIN or passphrase you set in `app_config_local.h`.
+8. Tap `Authenticate`, or tap `Trigger Gate` and let the app authenticate first.
 9. Confirm one clean relay click.
 10. Confirm an immediate second press shows cooldown behavior.
 
@@ -179,14 +191,14 @@ The Android app in [`android-app`](/Users/queenie/repos/chat/d5-evo-ble-gate/and
 - connect
 - authenticate
 - trigger relay
-- read controller/auth/info status
+- read controller/auth/challenge/info state
 
 Build steps:
 
 1. Open [`android-app`](/Users/queenie/repos/chat/d5-evo-ble-gate/android-app) in Android Studio.
 2. Let Gradle sync.
 3. Install the app on an Android phone with BLE.
-4. Enter the same PIN you set in `app_config_local.h`, if any.
+4. Enter the same PIN or passphrase you set in `app_config_local.h`, if any.
 5. Connect and trigger.
 
 ## iPhone app
@@ -196,14 +208,14 @@ The iPhone app in [`ios-app`](/Users/queenie/repos/chat/d5-evo-ble-gate/ios-app)
 - connect
 - authenticate
 - trigger relay
-- read controller/auth/info status
+- read controller/auth/challenge/info state
 
 Build steps:
 
 1. Open [`D5EvoBleGate.xcodeproj`](/Users/queenie/repos/chat/d5-evo-ble-gate/ios-app/D5EvoBleGate.xcodeproj) in Xcode.
 2. Select your Apple development team for signing if you want to install on a real iPhone.
 3. Build and run.
-4. Enter the same PIN you set in `app_config_local.h`, if any.
+4. Enter the same PIN or passphrase you set in `app_config_local.h`, if any.
 5. Connect and trigger.
 
 ## Removed from this repo

@@ -27,7 +27,9 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import java.nio.charset.StandardCharsets
+import java.security.MessageDigest
 import java.util.ArrayDeque
+import java.util.Locale
 import java.util.UUID
 
 class MainActivity : AppCompatActivity() {
@@ -55,6 +57,7 @@ class MainActivity : AppCompatActivity() {
 
     private var commandCharacteristic: BluetoothGattCharacteristic? = null
     private var controllerStatusCharacteristic: BluetoothGattCharacteristic? = null
+    private var authChallengeCharacteristic: BluetoothGattCharacteristic? = null
     private var infoCharacteristic: BluetoothGattCharacteristic? = null
     private var authStatusCharacteristic: BluetoothGattCharacteristic? = null
 
@@ -62,6 +65,9 @@ class MainActivity : AppCompatActivity() {
     private val operationQueue = ArrayDeque<GattOperation>()
     private var operationInFlight = false
     private var scanInProgress = false
+    private var authChallenge = ""
+    private var pendingAuthPin: String? = null
+    private var pendingTriggerAfterAuth = false
 
     private val permissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { grants ->
@@ -137,6 +143,7 @@ class MainActivity : AppCompatActivity() {
 
             commandCharacteristic = service.getCharacteristic(COMMAND_CHAR_UUID)
             controllerStatusCharacteristic = service.getCharacteristic(CONTROLLER_STATUS_CHAR_UUID)
+            authChallengeCharacteristic = service.getCharacteristic(AUTH_CHALLENGE_CHAR_UUID)
             infoCharacteristic = service.getCharacteristic(INFO_CHAR_UUID)
             authStatusCharacteristic = service.getCharacteristic(AUTH_STATUS_CHAR_UUID)
 
@@ -157,9 +164,18 @@ class MainActivity : AppCompatActivity() {
             operationInFlight = false
             if (status == BluetoothGatt.GATT_SUCCESS) {
                 val value = characteristic.value?.toString(StandardCharsets.UTF_8).orEmpty()
-                runOnUiThread { applyCharacteristicValue(characteristic.uuid, value) }
+                runOnUiThread {
+                    applyCharacteristicValue(characteristic.uuid, value)
+
+                    if (characteristic.uuid == AUTH_CHALLENGE_CHAR_UUID) {
+                        handleAuthChallengeValue(value)
+                    } else if (characteristic.uuid == AUTH_STATUS_CHAR_UUID) {
+                        handleAuthStatusValue(value)
+                    }
+                }
             } else {
                 runOnUiThread {
+                    clearPendingAuthRequest()
                     setMessage("Read failed for ${characteristic.uuid} with code $status.")
                 }
             }
@@ -174,11 +190,12 @@ class MainActivity : AppCompatActivity() {
             operationInFlight = false
             if (status == BluetoothGatt.GATT_SUCCESS) {
                 runOnUiThread {
-                    setMessage("Sent ${characteristic.value?.toString(StandardCharsets.UTF_8).orEmpty()}.")
+                    setMessage("Command sent.")
                 }
                 queueStatusRefresh()
             } else {
                 runOnUiThread {
+                    clearPendingAuthRequest()
                     setMessage("Write failed with code $status.")
                 }
             }
@@ -218,16 +235,12 @@ class MainActivity : AppCompatActivity() {
 
         authenticateButton.setOnClickListener {
             rememberPin()
-            enqueueCommand(buildAuthCommand())
+            authenticate()
         }
 
         triggerButton.setOnClickListener {
             rememberPin()
-            val pin = pinInput.text.toString().trim()
-            if (pin.isNotEmpty()) {
-                enqueueCommand(buildAuthCommand())
-            }
-            enqueueCommand("TRIGGER")
+            triggerGate()
         }
 
         refreshButton.setOnClickListener { queueStatusRefresh() }
@@ -245,6 +258,136 @@ class MainActivity : AppCompatActivity() {
         disconnectGatt()
     }
 
+    private fun authenticate() {
+        val pin = pinInput.text.toString().trim()
+        when (authValue.text.toString()) {
+            "disabled" -> {
+                setMessage("Authentication is disabled in the firmware.")
+                return
+            }
+
+            "authorized" -> {
+                setMessage("This phone is already authorized.")
+                return
+            }
+        }
+
+        if (pin.isEmpty()) {
+            setMessage("Enter the auth PIN or passphrase first.")
+            return
+        }
+
+        requestAuthentication(pin = pin, triggerAfterAuth = false)
+    }
+
+    private fun triggerGate() {
+        val pin = pinInput.text.toString().trim()
+        if (authValue.text.toString() == "disabled" || authValue.text.toString() == "authorized") {
+            enqueueCommand("TRIGGER")
+            return
+        }
+
+        if (pin.isEmpty()) {
+            setMessage("Enter the auth PIN or passphrase first.")
+            return
+        }
+
+        requestAuthentication(pin = pin, triggerAfterAuth = true)
+    }
+
+    private fun requestAuthentication(pin: String, triggerAfterAuth: Boolean) {
+        pendingAuthPin = pin
+        pendingTriggerAfterAuth = triggerAfterAuth
+        requestAuthChallengeRead()
+    }
+
+    private fun requestAuthChallengeRead() {
+        val challengeCharacteristic = authChallengeCharacteristic
+        if (challengeCharacteristic == null) {
+            clearPendingAuthRequest()
+            setMessage("Auth challenge characteristic is unavailable.")
+            return
+        }
+
+        operationQueue.add(GattOperation.ReadCharacteristic(challengeCharacteristic))
+        runNextOperation()
+    }
+
+    private fun handleAuthChallengeValue(value: String) {
+        val pin = pendingAuthPin ?: return
+
+        if (value == "disabled") {
+            clearPendingAuthRequest()
+            setMessage("Authentication is disabled in the firmware.")
+            return
+        }
+
+        val authCommand = buildAuthResponseCommand(pin, value)
+        if (authCommand == null) {
+            clearPendingAuthRequest()
+            setMessage("Auth challenge was invalid. Refresh and try again.")
+            return
+        }
+
+        pendingAuthPin = null
+        enqueueCommand(authCommand)
+        setMessage("Signing auth challenge locally.")
+    }
+
+    private fun handleAuthStatusValue(value: String) {
+        when (value) {
+            "authorized" -> {
+                setMessage("Authentication accepted.")
+                if (pendingTriggerAfterAuth) {
+                    pendingTriggerAfterAuth = false
+                    enqueueCommand("TRIGGER")
+                }
+            }
+
+            "denied" -> {
+                clearPendingAuthRequest()
+                setMessage("Authentication failed. Wait a moment, then try again.")
+            }
+
+            "required" -> {
+                if (!pendingTriggerAfterAuth) {
+                    setMessage("Authentication is required before triggering.")
+                }
+            }
+
+            "disabled" -> clearPendingAuthRequest()
+        }
+    }
+
+    private fun buildAuthResponseCommand(pin: String, challenge: String): String? {
+        val normalizedChallenge = challenge.trim().uppercase(Locale.US)
+        if (normalizedChallenge.length != 32) {
+            return null
+        }
+
+        val pinBytes = pin.toByteArray(StandardCharsets.UTF_8)
+        val challengeBytes = normalizedChallenge.toByteArray(StandardCharsets.UTF_8)
+        var digest = sha256(AUTH_LABEL + pinBytes + challengeBytes)
+
+        repeat(AUTH_HASH_ROUNDS - 1) {
+            digest = sha256(digest + pinBytes + challengeBytes)
+        }
+
+        val response = digest.joinToString(separator = "") {
+            String.format(Locale.US, "%02X", it.toInt() and 0xFF)
+        }
+        return "AUTHRESP $response"
+    }
+
+    private fun sha256(input: ByteArray): ByteArray {
+        return MessageDigest.getInstance("SHA-256").digest(input)
+    }
+
+    private fun clearPendingAuthRequest() {
+        pendingAuthPin = null
+        pendingTriggerAfterAuth = false
+    }
+
     private fun resetStatusViews() {
         controllerValue.text = getString(R.string.status_unknown)
         authValue.text = getString(R.string.status_unknown)
@@ -254,8 +397,11 @@ class MainActivity : AppCompatActivity() {
     private fun clearResolvedCharacteristics() {
         commandCharacteristic = null
         controllerStatusCharacteristic = null
+        authChallengeCharacteristic = null
         infoCharacteristic = null
         authStatusCharacteristic = null
+        authChallenge = ""
+        clearPendingAuthRequest()
     }
 
     private fun rememberPin() {
@@ -263,11 +409,6 @@ class MainActivity : AppCompatActivity() {
             .edit()
             .putString(PREF_PIN, pinInput.text.toString().trim())
             .apply()
-    }
-
-    private fun buildAuthCommand(): String {
-        val pin = pinInput.text.toString().trim()
-        return if (pin.isEmpty()) "AUTH" else "AUTH $pin"
     }
 
     private fun requiredPermissions(): Array<String> =
@@ -393,6 +534,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun queueStatusRefresh() {
         authStatusCharacteristic?.let { operationQueue.add(GattOperation.ReadCharacteristic(it)) }
+        authChallengeCharacteristic?.let { operationQueue.add(GattOperation.ReadCharacteristic(it)) }
         controllerStatusCharacteristic?.let {
             operationQueue.add(GattOperation.ReadCharacteristic(it))
         }
@@ -422,6 +564,7 @@ class MainActivity : AppCompatActivity() {
             is GattOperation.WriteCommand -> {
                 val characteristic = commandCharacteristic
                 if (characteristic == null) {
+                    clearPendingAuthRequest()
                     setMessage("Command characteristic is unavailable.")
                     return
                 }
@@ -429,6 +572,7 @@ class MainActivity : AppCompatActivity() {
                 operationInFlight = true
                 if (!gatt.writeCharacteristic(characteristic)) {
                     operationInFlight = false
+                    clearPendingAuthRequest()
                     setMessage("Failed to start command write.")
                     runNextOperation()
                 }
@@ -438,6 +582,7 @@ class MainActivity : AppCompatActivity() {
                 operationInFlight = true
                 if (!gatt.readCharacteristic(operation.characteristic)) {
                     operationInFlight = false
+                    clearPendingAuthRequest()
                     setMessage("Failed to start status read.")
                     runNextOperation()
                 }
@@ -449,6 +594,7 @@ class MainActivity : AppCompatActivity() {
         when (uuid) {
             CONTROLLER_STATUS_CHAR_UUID -> controllerValue.text = value
             AUTH_STATUS_CHAR_UUID -> authValue.text = value
+            AUTH_CHALLENGE_CHAR_UUID -> authChallenge = value
             INFO_CHAR_UUID -> infoValue.text = value
         }
     }
@@ -457,11 +603,16 @@ class MainActivity : AppCompatActivity() {
         private const val PREFS_NAME = "d5_evo_ble_gate"
         private const val PREF_PIN = "auth_pin"
         private const val SCAN_TIMEOUT_MS = 10_000L
+        private const val AUTH_HASH_ROUNDS = 2048
+
+        private val AUTH_LABEL = "D5-EVO-AUTH-V1|".toByteArray(StandardCharsets.UTF_8)
 
         private val SERVICE_UUID = UUID.fromString("4b8c2ec4-3f66-4f00-8a43-95f79d2c0cc1")
         private val COMMAND_CHAR_UUID = UUID.fromString("4b8c2ec4-3f66-4f00-8a43-95f79d2c0cc2")
         private val CONTROLLER_STATUS_CHAR_UUID =
             UUID.fromString("4b8c2ec4-3f66-4f00-8a43-95f79d2c0cc3")
+        private val AUTH_CHALLENGE_CHAR_UUID =
+            UUID.fromString("4b8c2ec4-3f66-4f00-8a43-95f79d2c0cc4")
         private val INFO_CHAR_UUID = UUID.fromString("4b8c2ec4-3f66-4f00-8a43-95f79d2c0cc5")
         private val AUTH_STATUS_CHAR_UUID =
             UUID.fromString("4b8c2ec4-3f66-4f00-8a43-95f79d2c0cc6")

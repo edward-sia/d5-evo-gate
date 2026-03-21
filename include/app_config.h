@@ -28,6 +28,10 @@ namespace AppConfig {
 #define D5_EVO_AUTH_SESSION_MS 30000UL
 #endif
 
+#ifndef D5_EVO_AUTH_LOCKOUT_MS
+#define D5_EVO_AUTH_LOCKOUT_MS 15000UL
+#endif
+
 #ifndef D5_EVO_DEVICE_NAME
 #define D5_EVO_DEVICE_NAME "D5-EVO-Gate"
 #endif
@@ -44,6 +48,7 @@ constexpr int kRelayActiveLevel = D5_EVO_RELAY_ACTIVE_LEVEL;
 constexpr unsigned long kRelayPulseMs = D5_EVO_RELAY_PULSE_MS;
 constexpr unsigned long kCooldownMs = D5_EVO_COOLDOWN_MS;
 constexpr unsigned long kAuthSessionMs = D5_EVO_AUTH_SESSION_MS;
+constexpr unsigned long kAuthLockoutMs = D5_EVO_AUTH_LOCKOUT_MS;
 
 constexpr char kDeviceName[] = D5_EVO_DEVICE_NAME;
 
@@ -55,6 +60,7 @@ constexpr char kAuthPin[] = D5_EVO_AUTH_PIN;
 constexpr char kServiceUuid[] = "4b8c2ec4-3f66-4f00-8a43-95f79d2c0cc1";
 constexpr char kCommandCharUuid[] = "4b8c2ec4-3f66-4f00-8a43-95f79d2c0cc2";
 constexpr char kControllerStatusCharUuid[] = "4b8c2ec4-3f66-4f00-8a43-95f79d2c0cc3";
+constexpr char kAuthChallengeCharUuid[] = "4b8c2ec4-3f66-4f00-8a43-95f79d2c0cc4";
 constexpr char kInfoCharUuid[] = "4b8c2ec4-3f66-4f00-8a43-95f79d2c0cc5";
 constexpr char kAuthStatusCharUuid[] = "4b8c2ec4-3f66-4f00-8a43-95f79d2c0cc6";
 

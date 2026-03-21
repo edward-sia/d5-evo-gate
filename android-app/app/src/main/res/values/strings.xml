@@ -7,7 +7,7 @@
     <string name="label_auth_status">Auth status</string>
     <string name="label_info">Device info</string>
     <string name="label_message">Last message</string>
-    <string name="hint_pin">Optional PIN from app_config_local.h</string>
+    <string name="hint_pin">PIN or passphrase from app_config_local.h</string>
     <string name="hint_bench">Bench test first: the relay should click for about half a second when triggered.</string>
     <string name="action_connect">Connect</string>
     <string name="action_authenticate">Authenticate</string>

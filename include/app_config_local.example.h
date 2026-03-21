@@ -12,7 +12,8 @@
 #define D5_EVO_RELAY_PULSE_MS 500UL
 #define D5_EVO_COOLDOWN_MS 5000UL
 #define D5_EVO_AUTH_SESSION_MS 30000UL
+#define D5_EVO_AUTH_LOCKOUT_MS 15000UL
 
-// Personalize these before live use.
+// Personalize these before live use. Use a strong PIN or passphrase here.
 #define D5_EVO_DEVICE_NAME "D5-EVO-Gate"
 #define D5_EVO_AUTH_PIN "CHANGE-ME"

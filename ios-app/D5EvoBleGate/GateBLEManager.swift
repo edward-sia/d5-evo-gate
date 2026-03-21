@@ -1,4 +1,5 @@
 import CoreBluetooth
+import CryptoKit
 import Foundation
 
 @MainActor
@@ -48,6 +49,9 @@ final class GateBLEManager: NSObject, ObservableObject {
     private var inFlightOperation: InFlightOperation?
     private var isScanning = false
     private var scanTimeoutTask: Task<Void, Never>?
+    private var authChallenge = ""
+    private var pendingAuthPin: String?
+    private var pendingTriggerAfterAuth = false
 
     private var commandCharacteristic: CBCharacteristic? {
         characteristics[Self.commandCharacteristicUUID]
@@ -88,15 +92,38 @@ final class GateBLEManager: NSObject, ObservableObject {
     }
 
     func authenticate(pin: String) {
-        enqueueWrite(pin.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "AUTH" : "AUTH \(pin)")
+        guard authStatus != "disabled" else {
+            message = "Authentication is disabled in the firmware."
+            return
+        }
+
+        guard authStatus != "authorized" else {
+            message = "This phone is already authorized."
+            return
+        }
+
+        let trimmedPin = pin.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedPin.isEmpty else {
+            message = "Enter the auth PIN or passphrase first."
+            return
+        }
+
+        requestAuthentication(pin: trimmedPin, triggerAfterAuth: false)
     }
 
     func triggerGate(pin: String) {
-        let trimmedPin = pin.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !trimmedPin.isEmpty {
-            enqueueWrite("AUTH \(trimmedPin)")
+        if authStatus == "disabled" || authStatus == "authorized" {
+            enqueueWrite("TRIGGER")
+            return
         }
-        enqueueWrite("TRIGGER")
+
+        let trimmedPin = pin.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedPin.isEmpty else {
+            message = "Enter the auth PIN or passphrase first."
+            return
+        }
+
+        requestAuthentication(pin: trimmedPin, triggerAfterAuth: true)
     }
 
     func refreshStatus() {
@@ -110,6 +137,7 @@ final class GateBLEManager: NSObject, ObservableObject {
         operationQueue.removeAll()
         operationInFlight = false
         inFlightOperation = nil
+        clearPendingAuthRequest()
 
         guard let peripheral else {
             connectionState = "Idle"
@@ -120,6 +148,23 @@ final class GateBLEManager: NSObject, ObservableObject {
 
         message = "Disconnecting from the gate controller."
         centralManager.cancelPeripheralConnection(peripheral)
+    }
+
+    private func requestAuthentication(pin: String, triggerAfterAuth: Bool) {
+        pendingAuthPin = pin
+        pendingTriggerAfterAuth = triggerAfterAuth
+        requestAuthChallengeRead()
+    }
+
+    private func requestAuthChallengeRead() {
+        guard characteristics[Self.authChallengeCharacteristicUUID] != nil else {
+            clearPendingAuthRequest()
+            message = "Auth challenge characteristic is unavailable."
+            return
+        }
+
+        operationQueue.append(.read(Self.authChallengeCharacteristicUUID))
+        runNextOperation()
     }
 
     private func enqueueWrite(_ command: String) {
@@ -140,6 +185,7 @@ final class GateBLEManager: NSObject, ObservableObject {
 
         let characteristicOrder = [
             Self.authStatusCharacteristicUUID,
+            Self.authChallengeCharacteristicUUID,
             Self.controllerStatusCharacteristicUUID,
             Self.infoCharacteristicUUID,
         ]
@@ -161,6 +207,7 @@ final class GateBLEManager: NSObject, ObservableObject {
             guard let characteristic = commandCharacteristic else {
                 message = "Command characteristic is unavailable."
                 operationQueue.removeAll()
+                clearPendingAuthRequest()
                 return
             }
 
@@ -197,15 +244,22 @@ final class GateBLEManager: NSObject, ObservableObject {
         isScanning = false
     }
 
+    private func clearPendingAuthRequest() {
+        pendingAuthPin = nil
+        pendingTriggerAfterAuth = false
+    }
+
     private func clearTransientState() {
         characteristics.removeAll()
         operationQueue.removeAll()
         operationInFlight = false
         inFlightOperation = nil
         peripheral = nil
+        authChallenge = ""
         controllerStatus = "unknown"
         authStatus = "unknown"
         deviceInfo = "unknown"
+        clearPendingAuthRequest()
     }
 
     private func centralStateMessage(for state: CBManagerState) -> String {
@@ -233,11 +287,75 @@ final class GateBLEManager: NSObject, ObservableObject {
             controllerStatus = stringValue
         case Self.authStatusCharacteristicUUID:
             authStatus = stringValue
+        case Self.authChallengeCharacteristicUUID:
+            authChallenge = stringValue
         case Self.infoCharacteristicUUID:
             deviceInfo = stringValue
         default:
             break
         }
+    }
+
+    private func handleAuthChallengeValue(_ value: String) {
+        guard let pin = pendingAuthPin else { return }
+
+        if value == "disabled" {
+            clearPendingAuthRequest()
+            message = "Authentication is disabled in the firmware."
+            return
+        }
+
+        guard let authCommand = buildAuthResponseCommand(pin: pin, challenge: value) else {
+            clearPendingAuthRequest()
+            message = "Auth challenge was invalid. Refresh and try again."
+            return
+        }
+
+        pendingAuthPin = nil
+        enqueueWrite(authCommand)
+        message = "Signing auth challenge locally."
+    }
+
+    private func handleAuthStatusChange(_ value: String) {
+        switch value {
+        case "authorized":
+            message = "Authentication accepted."
+            if pendingTriggerAfterAuth {
+                pendingTriggerAfterAuth = false
+                enqueueWrite("TRIGGER")
+            }
+        case "denied":
+            clearPendingAuthRequest()
+            message = "Authentication failed. Wait a moment, then try again."
+        case "required":
+            if !pendingTriggerAfterAuth {
+                message = "Authentication is required before triggering."
+            }
+        case "disabled":
+            clearPendingAuthRequest()
+        default:
+            break
+        }
+    }
+
+    private func buildAuthResponseCommand(pin: String, challenge: String) -> String? {
+        let normalizedChallenge = challenge.trimmingCharacters(in: .whitespacesAndNewlines)
+            .uppercased()
+
+        guard normalizedChallenge.count == 32 else {
+            return nil
+        }
+
+        let pinData = Data(pin.utf8)
+        let challengeData = Data(normalizedChallenge.utf8)
+        var digest = Data(SHA256.hash(data: Self.authLabelData + pinData + challengeData))
+
+        for _ in 1..<Self.authHashRounds {
+            digest = Data(SHA256.hash(data: digest + pinData + challengeData))
+        }
+
+        let responseHex = digest.map { String(format: "%02X", $0) }.joined()
+        return "AUTHRESP \(responseHex)"
     }
 }
 
@@ -322,6 +440,7 @@ extension GateBLEManager: CBPeripheralDelegate {
                 [
                     Self.commandCharacteristicUUID,
                     Self.controllerStatusCharacteristicUUID,
+                    Self.authChallengeCharacteristicUUID,
                     Self.infoCharacteristicUUID,
                     Self.authStatusCharacteristicUUID,
                 ],
@@ -365,6 +484,7 @@ extension GateBLEManager: CBPeripheralDelegate {
         Task { @MainActor in
             if let error {
                 self.message = error.localizedDescription
+                self.clearPendingAuthRequest()
             } else {
                 self.message = "Command sent."
                 self.enqueueStatusRefresh()
@@ -383,9 +503,16 @@ extension GateBLEManager: CBPeripheralDelegate {
         Task { @MainActor in
             if let error {
                 self.message = error.localizedDescription
+                self.clearPendingAuthRequest()
             } else {
                 let value = String(data: characteristic.value ?? Data(), encoding: .utf8) ?? "unknown"
                 self.updateValue(value, for: characteristic.uuid)
+
+                if characteristic.uuid == Self.authChallengeCharacteristicUUID {
+                    self.handleAuthChallengeValue(value)
+                } else if characteristic.uuid == Self.authStatusCharacteristicUUID {
+                    self.handleAuthStatusChange(value)
+                }
             }
             if case .read(let uuid)? = self.inFlightOperation, uuid == characteristic.uuid {
                 self.completeOperation()
@@ -412,9 +539,13 @@ extension GateBLEManager: CBPeripheralDelegate {
 }
 
 extension GateBLEManager {
+    private static let authHashRounds = 2048
+    private static let authLabelData = Data("D5-EVO-AUTH-V1|".utf8)
+
     static let serviceUUID = CBUUID(string: "4b8c2ec4-3f66-4f00-8a43-95f79d2c0cc1")
     static let commandCharacteristicUUID = CBUUID(string: "4b8c2ec4-3f66-4f00-8a43-95f79d2c0cc2")
     static let controllerStatusCharacteristicUUID = CBUUID(string: "4b8c2ec4-3f66-4f00-8a43-95f79d2c0cc3")
+    static let authChallengeCharacteristicUUID = CBUUID(string: "4b8c2ec4-3f66-4f00-8a43-95f79d2c0cc4")
     static let infoCharacteristicUUID = CBUUID(string: "4b8c2ec4-3f66-4f00-8a43-95f79d2c0cc5")
     static let authStatusCharacteristicUUID = CBUUID(string: "4b8c2ec4-3f66-4f00-8a43-95f79d2c0cc6")
 }

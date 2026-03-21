@@ -25,7 +25,7 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 8) {
             Text("ESP32 38-pin USB-C local Bluetooth trigger for a Centurion D5-Evo gate motor.")
                 .font(.headline)
-            Text("This app scans for the relay controller, optionally authenticates, and sends a momentary trigger.")
+            Text("This app scans for the relay controller, signs a local auth challenge when needed, and sends a momentary trigger.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
         }
@@ -46,15 +46,15 @@ struct ContentView: View {
 
     private var pinCard: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("PIN")
+            Text("PIN or Passphrase")
                 .font(.headline)
-            SecureField("Optional PIN from app_config_local.h", text: $authPin)
+            SecureField("PIN or passphrase from app_config_local.h", text: $authPin)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
                 .padding(12)
                 .background(Color(.secondarySystemBackground))
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-            Text("Leave this blank if you kept authentication disabled in the firmware.")
+            Text("Leave this blank only if you kept authentication disabled in the firmware.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
             Text("Bench test first: the relay should click for about half a second when triggered.")
