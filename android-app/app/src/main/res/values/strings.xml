@@ -1,16 +1,21 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Newhaven</string>
-    <string name="subtitle">ESP32 38-pin USB-C local Bluetooth pedestrian trigger for a Centurion D5-Evo gate motor.</string>
-    <string name="label_connection">Connection</string>
+    <string name="subtitle">Simple Bluetooth control for your nearby gate.</string>
+    <string name="label_connection">Link</string>
+    <string name="label_controller_short">Gate</string>
+    <string name="label_auth_short">Lock</string>
     <string name="label_controller_status">Controller status</string>
     <string name="label_auth_status">Auth status</string>
     <string name="label_info">Device info</string>
+    <string name="label_primary_action">Pedestrian access</string>
     <string name="label_message">Last message</string>
-    <string name="hint_bench">Bench test first: the relay should click for about half a second when triggered.</string>
+    <string name="hint_bench">Bench test first if this is a new setup.</string>
+    <string name="action_cancel">Cancel</string>
     <string name="action_connect">Connect</string>
-    <string name="action_trigger">Pedestrian Open</string>
+    <string name="action_trigger">Pedestrian</string>
     <string name="action_refresh">Refresh Status</string>
+    <string name="action_refresh_compact">Refresh</string>
     <string name="action_disconnect">Disconnect</string>
     <string name="status_unknown">unknown</string>
 </resources>

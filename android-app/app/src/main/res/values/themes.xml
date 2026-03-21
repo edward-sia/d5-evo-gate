@@ -3,10 +3,10 @@
     <style name="Theme.D5EvoBleGate" parent="Theme.Material3.Light.NoActionBar">
         <item name="colorPrimary">@color/seed</item>
         <item name="colorSecondary">@color/seed</item>
-        <item name="android:colorBackground">@color/surface</item>
+        <item name="android:colorBackground">@color/surfaceAlt</item>
         <item name="colorSurface">@color/surface</item>
         <item name="colorSurfaceVariant">@color/surfaceVariant</item>
         <item name="android:textColor">@color/onSurface</item>
-        <item name="android:statusBarColor" tools:targetApi="l">@color/surface</item>
+        <item name="android:statusBarColor" tools:targetApi="l">@color/surfaceAlt</item>
     </style>
 </resources>

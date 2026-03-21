@@ -14,12 +14,14 @@ import android.bluetooth.le.ScanFilter
 import android.bluetooth.le.ScanResult
 import android.bluetooth.le.ScanSettings
 import android.content.Context
+import android.content.res.ColorStateList
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.ParcelUuid
+import android.view.View
 import android.widget.Button
 import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts
@@ -41,10 +43,10 @@ class MainActivity : AppCompatActivity() {
     private lateinit var connectionValue: TextView
     private lateinit var controllerValue: TextView
     private lateinit var authValue: TextView
+    private lateinit var primaryTitleValue: TextView
     private lateinit var infoValue: TextView
     private lateinit var messageValue: TextView
     private lateinit var connectButton: Button
-    private lateinit var triggerButton: Button
     private lateinit var refreshButton: Button
     private lateinit var disconnectButton: Button
 
@@ -62,6 +64,10 @@ class MainActivity : AppCompatActivity() {
     private val operationQueue = ArrayDeque<GattOperation>()
     private var operationInFlight = false
     private var scanInProgress = false
+    private var connectionState = "Idle"
+    private var controllerStatus = "unknown"
+    private var authStatus = "unknown"
+    private var deviceInfo = "unknown"
     private var authChallenge = ""
     private var pendingAuthPin: String? = null
     private var pendingTriggerAfterAuth = false
@@ -207,10 +213,10 @@ class MainActivity : AppCompatActivity() {
         connectionValue = findViewById(R.id.connectionValue)
         controllerValue = findViewById(R.id.controllerValue)
         authValue = findViewById(R.id.authValue)
+        primaryTitleValue = findViewById(R.id.primaryTitleValue)
         infoValue = findViewById(R.id.infoValue)
         messageValue = findViewById(R.id.messageValue)
         connectButton = findViewById(R.id.connectButton)
-        triggerButton = findViewById(R.id.triggerButton)
         refreshButton = findViewById(R.id.refreshButton)
         disconnectButton = findViewById(R.id.disconnectButton)
 
@@ -218,15 +224,7 @@ class MainActivity : AppCompatActivity() {
         bluetoothAdapter = bluetoothManager.adapter
 
         connectButton.setOnClickListener {
-            if (hasAllPermissions()) {
-                startScanAndConnect()
-            } else {
-                permissionLauncher.launch(requiredPermissions())
-            }
-        }
-
-        triggerButton.setOnClickListener {
-            triggerGate()
+            handlePrimaryAction()
         }
 
         refreshButton.setOnClickListener { queueStatusRefresh() }
@@ -234,7 +232,7 @@ class MainActivity : AppCompatActivity() {
 
         resetStatusViews()
         setConnection("Idle")
-        setMessage("Press Connect to find the gate controller.")
+        setMessage("Tap Connect when you're ready.")
         updateButtonState()
     }
 
@@ -245,7 +243,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun triggerGate() {
-        if (authValue.text.toString() == "disabled" || authValue.text.toString() == "authorized") {
+        if (authStatus == "disabled" || authStatus == "authorized") {
             enqueueCommand("PED")
             return
         }
@@ -352,9 +350,13 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun resetStatusViews() {
-        controllerValue.text = getString(R.string.status_unknown)
-        authValue.text = getString(R.string.status_unknown)
-        infoValue.text = getString(R.string.status_unknown)
+        controllerStatus = "unknown"
+        authStatus = "unknown"
+        deviceInfo = "unknown"
+        applyStatusPresentation(connectionValue, statusPresentationForConnection(connectionState))
+        applyStatusPresentation(controllerValue, statusPresentationForController(controllerStatus))
+        applyStatusPresentation(authValue, statusPresentationForAuth(authStatus))
+        updatePrimaryCard()
     }
 
     private fun clearResolvedCharacteristics() {
@@ -383,20 +385,154 @@ class MainActivity : AppCompatActivity() {
         }
 
     private fun setConnection(value: String) {
-        connectionValue.text = value
+        connectionState = value
+        applyStatusPresentation(connectionValue, statusPresentationForConnection(value))
+        updatePrimaryCard()
+        updateButtonState()
     }
 
     private fun setMessage(value: String) {
         messageValue.text = value
+        messageValue.visibility = if (value.isBlank()) View.GONE else View.VISIBLE
     }
 
     private fun updateButtonState() {
-        val connected = bluetoothGatt != null && commandCharacteristic != null
-        connectButton.isEnabled = !scanInProgress && !connected
-        triggerButton.isEnabled = connected
+        val connected = isConnected()
+        val canStartScan = !scanInProgress && !connected
+        connectButton.isEnabled =
+            if (connected) {
+                controllerStatus.lowercase(Locale.US) != "pulsing"
+            } else {
+                canStartScan
+            }
+        connectButton.text =
+            if (connected) {
+                getString(R.string.action_trigger)
+            } else {
+                getString(R.string.action_connect)
+            }
+        connectButton.backgroundTintList =
+            ColorStateList.valueOf(
+                ContextCompat.getColor(this, primaryActionTintRes()),
+            )
+
+        refreshButton.visibility = if (connected) View.VISIBLE else View.GONE
         refreshButton.isEnabled = connected
-        disconnectButton.isEnabled = scanInProgress || connected
+
+        val canStop = scanInProgress || connected
+        disconnectButton.visibility = if (canStop) View.VISIBLE else View.GONE
+        disconnectButton.isEnabled = canStop
+        disconnectButton.text =
+            if (scanInProgress) {
+                getString(R.string.action_cancel)
+            } else {
+                getString(R.string.action_disconnect)
+            }
+
+        updatePrimaryCard()
     }
+
+    private fun handlePrimaryAction() {
+        if (isConnected()) {
+            triggerGate()
+        } else if (hasAllPermissions()) {
+            startScanAndConnect()
+        } else {
+            permissionLauncher.launch(requiredPermissions())
+        }
+    }
+
+    private fun updatePrimaryCard() {
+        primaryTitleValue.text = primaryTitle()
+        infoValue.text = primaryDetail()
+    }
+
+    private fun primaryTitle(): String =
+        if (!isConnected()) {
+            when (connectionState.lowercase(Locale.US)) {
+                "scanning" -> "Looking nearby"
+                "connecting" -> "Connecting"
+                "discovering services" -> "Finishing setup"
+                "not found" -> "Not found"
+                else -> "Pedestrian access"
+            }
+        } else {
+            when (controllerStatus.lowercase(Locale.US)) {
+                "pulsing" -> "Opening partway"
+                "cooldown" -> "Please wait"
+                "locked", "bad-command" -> "Check the lock"
+                else -> "Ready"
+            }
+        }
+
+    private fun primaryDetail(): String {
+        if (!isConnected()) {
+            return when (connectionState.lowercase(Locale.US)) {
+                "scanning" -> "Searching over Bluetooth."
+                "connecting" -> "Joining your gate controller."
+                "discovering services" -> "Almost ready."
+                "not found" -> "Move closer and try again."
+                else -> "Nearby Bluetooth control for your gate."
+            }
+        }
+
+        return when {
+            deviceInfo.isNotBlank() && deviceInfo.lowercase(Locale.US) != "unknown" -> deviceInfo
+            authStatus == "required" -> "Unlock is required before triggering."
+            authStatus == "authorized" -> "Ready to open for a pedestrian."
+            else -> "Connected and ready when you are."
+        }
+    }
+
+    private fun primaryActionTintRes(): Int =
+        if (!isConnected()) {
+            R.color.statusBlue
+        } else {
+            when (controllerStatus.lowercase(Locale.US)) {
+                "ready" -> R.color.statusGreen
+                "cooldown" -> R.color.statusOrange
+                "locked", "bad-command" -> R.color.statusRed
+                else -> R.color.statusBlue
+            }
+        }
+
+    private fun isConnected(): Boolean = bluetoothGatt != null && commandCharacteristic != null
+
+    private fun applyStatusPresentation(view: TextView, presentation: StatusPresentation) {
+        view.text = presentation.title
+        view.setTextColor(ContextCompat.getColor(this, presentation.colorRes))
+    }
+
+    private fun statusPresentationForConnection(value: String): StatusPresentation =
+        when (value.lowercase(Locale.US)) {
+            "connected" -> StatusPresentation("On", R.color.statusGreen)
+            "scanning" -> StatusPresentation("Scan", R.color.statusBlue)
+            "connecting", "discovering services" -> StatusPresentation("Join", R.color.statusBlue)
+            "not found" -> StatusPresentation("Miss", R.color.statusOrange)
+            "scan failed", "connect failed", "service discovery failed", "wrong device" ->
+                StatusPresentation("Error", R.color.statusRed)
+
+            else -> StatusPresentation("Off", R.color.statusMuted)
+        }
+
+    private fun statusPresentationForController(value: String): StatusPresentation =
+        when (value.lowercase(Locale.US)) {
+            "ready" -> StatusPresentation("Ready", R.color.statusGreen)
+            "pulsing" -> StatusPresentation("Open", R.color.statusBlue)
+            "cooldown" -> StatusPresentation("Wait", R.color.statusOrange)
+            "locked" -> StatusPresentation("Lock", R.color.statusRed)
+            "bad-command" -> StatusPresentation("Error", R.color.statusRed)
+            else -> StatusPresentation("Idle", R.color.statusMuted)
+        }
+
+    private fun statusPresentationForAuth(value: String): StatusPresentation =
+        when (value.lowercase(Locale.US)) {
+            "authorized" -> StatusPresentation("Open", R.color.statusGreen)
+            "required" -> StatusPresentation("Need", R.color.statusOrange)
+            "denied" -> StatusPresentation("No", R.color.statusRed)
+            "disabled" -> StatusPresentation("Off", R.color.statusMuted)
+            else -> StatusPresentation("Idle", R.color.statusMuted)
+        }
 
     @SuppressLint("MissingPermission")
     private fun startScanAndConnect() {
@@ -513,7 +649,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         val gatt = bluetoothGatt ?: return
-        val operation = operationQueue.removeFirstOrNull() ?: return
+        val operation = operationQueue.pollFirst() ?: return
 
         when (operation) {
             is GattOperation.WriteCommand -> {
@@ -547,11 +683,22 @@ class MainActivity : AppCompatActivity() {
 
     private fun applyCharacteristicValue(uuid: UUID, value: String) {
         when (uuid) {
-            CONTROLLER_STATUS_CHAR_UUID -> controllerValue.text = value
-            AUTH_STATUS_CHAR_UUID -> authValue.text = value
+            CONTROLLER_STATUS_CHAR_UUID -> {
+                controllerStatus = value
+                applyStatusPresentation(controllerValue, statusPresentationForController(value))
+            }
+
+            AUTH_STATUS_CHAR_UUID -> {
+                authStatus = value
+                applyStatusPresentation(authValue, statusPresentationForAuth(value))
+            }
+
             AUTH_CHALLENGE_CHAR_UUID -> authChallenge = value
-            INFO_CHAR_UUID -> infoValue.text = value
+            INFO_CHAR_UUID -> deviceInfo = value
         }
+
+        updatePrimaryCard()
+        updateButtonState()
     }
 
     companion object {
@@ -571,3 +718,8 @@ class MainActivity : AppCompatActivity() {
             UUID.fromString("4b8c2ec4-3f66-4f00-8a43-95f79d2c0cc6")
     }
 }
+
+private data class StatusPresentation(
+    val title: String,
+    val colorRes: Int,
+)

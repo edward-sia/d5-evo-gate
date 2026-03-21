@@ -1,7 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="seed">#1E5E4A</color>
-    <color name="surface">#FAF7F0</color>
-    <color name="surfaceVariant">#E4E2D8</color>
-    <color name="onSurface">#1D1B18</color>
+    <color name="seed">#0A84FF</color>
+    <color name="surface">#FFFFFF</color>
+    <color name="surfaceAlt">#F2F2F7</color>
+    <color name="surfaceVariant">#E5E5EA</color>
+    <color name="onSurface">#111111</color>
+    <color name="onSurfaceMuted">#6E6E73</color>
+    <color name="statusBlue">#0A84FF</color>
+    <color name="statusGreen">#34C759</color>
+    <color name="statusOrange">#FF9F0A</color>
+    <color name="statusRed">#FF3B30</color>
+    <color name="statusMuted">#6E6E73</color>
 </resources>
