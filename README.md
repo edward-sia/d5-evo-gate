@@ -131,6 +131,7 @@ Auth protocol:
 - the phone computes a local `SHA-256` based response over the challenge and your PIN or passphrase
 - the phone writes `AUTHRESP <hex>`
 - the raw PIN or passphrase is not sent over BLE
+- the mobile apps keep the passphrase only in memory while they are open
 
 ## Configuration
 
@@ -149,6 +150,21 @@ Use local overrides instead of editing the shared defaults:
 
 The firmware automatically includes `app_config_local.h` when present.
 That file is git-ignored so your real auth secret stays local and is not committed.
+
+### Recommended passphrase setup
+
+For this project, a passphrase is better than a short numeric PIN.
+
+- good: `green-lantern-river-table`
+- good: `harbor candle orbit maple`
+- avoid: `1234`, gate address numbers, birthdays, or anything easy to guess
+
+The simplest setup flow is:
+
+1. Copy [`app_config_local.example.h`](/Users/queenie/repos/chat/d5-evo-ble-gate/include/app_config_local.example.h) to `include/app_config_local.h`.
+2. Change only `D5_EVO_AUTH_PIN` first.
+3. Reflash the ESP32.
+4. Enter the same passphrase in the iPhone or Android app when you connect.
 
 ## Build and flash the ESP32
 
@@ -178,7 +194,7 @@ Do this before any connection to the D5-Evo:
 4. Flash the ESP32 firmware.
 5. Open the Android or iPhone app.
 6. Connect to the BLE device.
-7. If you enabled auth, enter the same PIN or passphrase you set in `app_config_local.h`.
+7. If you enabled auth, enter the same passphrase you set in `app_config_local.h`.
 8. Tap `Authenticate`, or tap `Trigger Gate` and let the app authenticate first.
 9. Confirm one clean relay click.
 10. Confirm an immediate second press shows cooldown behavior.
@@ -211,14 +227,15 @@ The iPhone app in [`ios-app`](/Users/queenie/repos/chat/d5-evo-ble-gate/ios-app)
 - authenticate
 - trigger relay
 - read controller/auth/challenge/info state
+- keep the passphrase in memory only while the app stays open
 
 Build steps:
 
 1. Open [`D5EvoBleGate.xcodeproj`](/Users/queenie/repos/chat/d5-evo-ble-gate/ios-app/D5EvoBleGate.xcodeproj) in Xcode.
 2. Select your Apple development team for signing if you want to install on a real iPhone.
 3. Build and run.
-4. Enter the same PIN or passphrase you set in `app_config_local.h`, if any.
-   The app does not store it persistently.
+4. Enter the same passphrase you set in `app_config_local.h`, if any.
+   The app keeps it only in memory while open.
 5. Connect and trigger.
 
 ## Removed from this repo

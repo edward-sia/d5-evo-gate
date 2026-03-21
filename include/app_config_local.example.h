@@ -14,6 +14,9 @@
 #define D5_EVO_AUTH_SESSION_MS 30000UL
 #define D5_EVO_AUTH_LOCKOUT_MS 15000UL
 
-// Personalize these before live use. Use a strong PIN or passphrase here.
+// Personalize these before live use.
+// Prefer a passphrase over a short PIN because it is easier to enter on a phone
+// and much harder to guess. A good default is 4 random words or 14+ characters.
+// Leave D5_EVO_AUTH_PIN empty only while bench testing if you want auth disabled.
 #define D5_EVO_DEVICE_NAME "D5-EVO-Gate"
-#define D5_EVO_AUTH_PIN "CHANGE-ME"
+#define D5_EVO_AUTH_PIN ""

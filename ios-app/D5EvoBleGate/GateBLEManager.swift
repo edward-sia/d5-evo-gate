@@ -8,7 +8,7 @@ final class GateBLEManager: NSObject, ObservableObject {
     @Published var controllerStatus = "unknown"
     @Published var authStatus = "unknown"
     @Published var deviceInfo = "unknown"
-    @Published var message = "Tap Connect to look for the gate controller."
+    @Published var message = "Tap Find Nearby Gate when you're ready."
 
     var isConnected: Bool {
         peripheral != nil && commandCharacteristic != nil
@@ -25,10 +25,6 @@ final class GateBLEManager: NSObject, ObservableObject {
 
     var canDisconnect: Bool {
         isScanning || peripheral != nil
-    }
-
-    var connectButtonTitle: String {
-        isScanning ? "Scanning..." : "Connect"
     }
 
     private enum Operation {
@@ -64,18 +60,18 @@ final class GateBLEManager: NSObject, ObservableObject {
         }
 
         guard !isScanning else {
-            message = "Already scanning for the gate controller."
+            message = "Already looking for your gate nearby."
             return
         }
 
         guard !isConnected else {
-            message = "Already connected to the gate controller."
+            message = "Your iPhone is already connected."
             return
         }
 
         clearTransientState()
         connectionState = "Scanning"
-        message = "Looking for D5-EVO-Gate over Bluetooth."
+        message = "Searching nearby over Bluetooth."
         isScanning = true
         centralManager.scanForPeripherals(
             withServices: [Self.serviceUUID],
@@ -93,18 +89,18 @@ final class GateBLEManager: NSObject, ObservableObject {
 
     func authenticate(pin: String) {
         guard authStatus != "disabled" else {
-            message = "Authentication is disabled in the firmware."
+            message = "Protection is turned off on the controller."
             return
         }
 
         guard authStatus != "authorized" else {
-            message = "This phone is already authorized."
+            message = "This iPhone is already unlocked."
             return
         }
 
         let trimmedPin = pin.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedPin.isEmpty else {
-            message = "Enter the auth PIN or passphrase first."
+            message = "Enter your passphrase first."
             return
         }
 
@@ -119,7 +115,7 @@ final class GateBLEManager: NSObject, ObservableObject {
 
         let trimmedPin = pin.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedPin.isEmpty else {
-            message = "Enter the auth PIN or passphrase first."
+            message = "Enter your passphrase first."
             return
         }
 
@@ -146,7 +142,7 @@ final class GateBLEManager: NSObject, ObservableObject {
             return
         }
 
-        message = "Disconnecting from the gate controller."
+        message = "Disconnecting."
         centralManager.cancelPeripheralConnection(peripheral)
     }
 
@@ -159,7 +155,7 @@ final class GateBLEManager: NSObject, ObservableObject {
     private func requestAuthChallengeRead() {
         guard characteristics[Self.authChallengeCharacteristicUUID] != nil else {
             clearPendingAuthRequest()
-            message = "Auth challenge characteristic is unavailable."
+            message = "This controller does not support passphrase unlock."
             return
         }
 
@@ -169,7 +165,7 @@ final class GateBLEManager: NSObject, ObservableObject {
 
     private func enqueueWrite(_ command: String) {
         guard commandCharacteristic != nil else {
-            message = "Connect to the gate controller first."
+            message = "Connect to the gate first."
             return
         }
 
@@ -179,7 +175,7 @@ final class GateBLEManager: NSObject, ObservableObject {
 
     private func enqueueStatusRefresh() {
         guard peripheral != nil else {
-            message = "Connect to the gate controller first."
+            message = "Connect to the gate first."
             return
         }
 
@@ -265,7 +261,7 @@ final class GateBLEManager: NSObject, ObservableObject {
     private func centralStateMessage(for state: CBManagerState) -> String {
         switch state {
         case .unknown:
-            return "Bluetooth is still starting up."
+            return "Bluetooth is starting up."
         case .resetting:
             return "Bluetooth is resetting. Try again in a moment."
         case .unsupported:
@@ -273,7 +269,7 @@ final class GateBLEManager: NSObject, ObservableObject {
         case .unauthorized:
             return "Bluetooth access is not allowed for this app."
         case .poweredOff:
-            return "Turn Bluetooth on in iPhone settings first."
+            return "Turn Bluetooth on in Settings first."
         case .poweredOn:
             return "Bluetooth is ready."
         @unknown default:
@@ -301,35 +297,35 @@ final class GateBLEManager: NSObject, ObservableObject {
 
         if value == "disabled" {
             clearPendingAuthRequest()
-            message = "Authentication is disabled in the firmware."
+            message = "Protection is turned off on the controller."
             return
         }
 
         guard let authCommand = buildAuthResponseCommand(pin: pin, challenge: value) else {
             clearPendingAuthRequest()
-            message = "Auth challenge was invalid. Refresh and try again."
+            message = "The unlock request expired. Refresh and try again."
             return
         }
 
         pendingAuthPin = nil
         enqueueWrite(authCommand)
-        message = "Signing auth challenge locally."
+        message = "Unlocking with your passphrase."
     }
 
     private func handleAuthStatusChange(_ value: String) {
         switch value {
         case "authorized":
-            message = "Authentication accepted."
+            message = "Unlocked for a short time."
             if pendingTriggerAfterAuth {
                 pendingTriggerAfterAuth = false
                 enqueueWrite("TRIGGER")
             }
         case "denied":
             clearPendingAuthRequest()
-            message = "Authentication failed. Wait a moment, then try again."
+            message = "That passphrase did not match. Wait a moment, then try again."
         case "required":
             if !pendingTriggerAfterAuth {
-                message = "Authentication is required before triggering."
+                message = "Unlock the gate controls first."
             }
         case "disabled":
             clearPendingAuthRequest()
@@ -390,7 +386,7 @@ extension GateBLEManager: CBCentralManagerDelegate {
     nonisolated func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
         Task { @MainActor in
             self.connectionState = "Discovering services"
-            self.message = "Connected. Discovering BLE services."
+            self.message = "Connected. Finishing setup."
             peripheral.discoverServices([Self.serviceUUID])
         }
     }
@@ -415,7 +411,7 @@ extension GateBLEManager: CBCentralManagerDelegate {
         Task { @MainActor in
             self.clearTransientState()
             self.connectionState = "Disconnected"
-            self.message = error?.localizedDescription ?? "Disconnected from the gate controller."
+            self.message = error?.localizedDescription ?? "Disconnected from the gate."
         }
     }
 }
@@ -431,7 +427,7 @@ extension GateBLEManager: CBPeripheralDelegate {
 
             guard let service = peripheral.services?.first(where: { $0.uuid == Self.serviceUUID }) else {
                 self.connectionState = "Wrong device"
-                self.message = "Connected device does not expose the D5-EVO BLE service."
+                self.message = "This nearby device is not your gate controller."
                 self.centralManager.cancelPeripheralConnection(peripheral)
                 return
             }
@@ -471,7 +467,7 @@ extension GateBLEManager: CBPeripheralDelegate {
             }
 
             self.connectionState = "Connected"
-            self.message = "Gate controller ready."
+            self.message = "Ready to use."
             self.enqueueStatusRefresh()
         }
     }
@@ -486,7 +482,7 @@ extension GateBLEManager: CBPeripheralDelegate {
                 self.message = error.localizedDescription
                 self.clearPendingAuthRequest()
             } else {
-                self.message = "Command sent."
+                self.message = "Action sent."
                 self.enqueueStatusRefresh()
             }
             if case .write(let uuid)? = self.inFlightOperation, uuid == characteristic.uuid {

@@ -3,127 +3,282 @@ import SwiftUI
 struct ContentView: View {
     @EnvironmentObject private var bleManager: GateBLEManager
     @State private var authPin = ""
+    @State private var revealsPassphrase = false
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
-                    header
-                    statusCard
-                    pinCard
-                    actionCard
-                    messageCard
+            List {
+                Section {
+                    heroCard
                 }
-                .padding(20)
+
+                Section("Status") {
+                    LabeledContent("Connection") {
+                        statusBadge(connectionPresentation)
+                    }
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        LabeledContent("Gate") {
+                            statusBadge(controllerPresentation)
+                        }
+
+                        Text(controllerPresentation.detail)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        LabeledContent("Security") {
+                            statusBadge(authPresentation)
+                        }
+
+                        Text(authPresentation.detail)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        LabeledContent("Controller") {
+                            Text(bleManager.deviceInfoDisplay)
+                                .foregroundStyle(.secondary)
+                        }
+
+                        Text("Nearby over Bluetooth from your local gate controller.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                Section("Security") {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("Use the same passphrase you set in the firmware.")
+                            .foregroundStyle(.secondary)
+
+                        HStack(spacing: 12) {
+                            Group {
+                                if revealsPassphrase {
+                                    TextField("Passphrase", text: $authPin)
+                                } else {
+                                    SecureField("Passphrase", text: $authPin)
+                                }
+                            }
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .privacySensitive()
+
+                            Button(revealsPassphrase ? "Hide" : "Show") {
+                                revealsPassphrase.toggle()
+                            }
+                            .buttonStyle(.borderless)
+                            .foregroundStyle(.secondary)
+                        }
+
+                        Text("The app keeps this only in memory while it is open.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    if bleManager.authStatus != "disabled" {
+                        Button {
+                            bleManager.authenticate(pin: authPin)
+                        } label: {
+                            Label("Unlock for 30 seconds", systemImage: "lock.open")
+                        }
+                        .disabled(!bleManager.isConnected)
+                    } else {
+                        Label("Protection is off in firmware right now.", systemImage: "exclamationmark.shield")
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                Section {
+                    Button {
+                        if bleManager.isConnected {
+                            bleManager.triggerGate(pin: authPin)
+                        } else {
+                            bleManager.startScanAndConnect()
+                        }
+                    } label: {
+                        Label(primaryActionTitle, systemImage: primaryActionSymbol)
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(primaryActionDisabled)
+                    .listRowInsets(EdgeInsets(top: 10, leading: 16, bottom: 10, trailing: 16))
+
+                    if bleManager.isConnected {
+                        Button {
+                            bleManager.refreshStatus()
+                        } label: {
+                            Label("Refresh Status", systemImage: "arrow.clockwise")
+                        }
+                    }
+                }
+
+                Section("Recent Activity") {
+                    Text(bleManager.message)
+                        .foregroundStyle(.secondary)
+                }
             }
-            .background(Color(.systemGroupedBackground))
-            .navigationTitle("D5-EVO Gate")
+            .listStyle(.insetGrouped)
+            .navigationTitle("Gate")
+            .navigationBarTitleDisplayMode(.large)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    if bleManager.canDisconnect {
+                        Button("Disconnect") {
+                            bleManager.disconnect()
+                        }
+                    }
+                }
+            }
         }
     }
 
-    private var header: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("ESP32 38-pin USB-C local Bluetooth trigger for a Centurion D5-Evo gate motor.")
-                .font(.headline)
-            Text("This app scans for the relay controller, signs a local auth challenge when needed, and sends a momentary trigger.")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-        }
-    }
-
-    private var statusCard: some View {
+    private var heroCard: some View {
         VStack(alignment: .leading, spacing: 12) {
-            statusRow(title: "Connection", value: bleManager.connectionState)
-            statusRow(title: "Controller", value: bleManager.controllerStatus)
-            statusRow(title: "Auth", value: bleManager.authStatus)
-            statusRow(title: "Info", value: bleManager.deviceInfo)
-        }
-        .padding()
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.background)
-        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-    }
+            Label {
+                Text(heroTitle)
+                    .font(.title3.weight(.semibold))
+            } icon: {
+                Image(systemName: heroSymbol)
+                    .font(.title2)
+                    .foregroundStyle(heroTint)
+            }
 
-    private var pinCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("PIN or Passphrase")
-                .font(.headline)
-            SecureField("PIN or passphrase from app_config_local.h (not stored)", text: $authPin)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .padding(12)
-                .background(Color(.secondarySystemBackground))
-                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-            Text("Leave this blank only if you kept authentication disabled in the firmware.")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-            Text("Bench test first: the relay should click for about half a second when triggered.")
-                .font(.footnote)
+            Text(heroSubtitle)
                 .foregroundStyle(.secondary)
         }
-        .padding()
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.background)
-        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .padding(.vertical, 8)
     }
 
-    private var actionCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Button(bleManager.connectButtonTitle) {
-                bleManager.startScanAndConnect()
-            }
-            .buttonStyle(.borderedProminent)
-            .disabled(!bleManager.canStartScan)
-
-            Button("Authenticate") {
-                bleManager.authenticate(pin: authPin)
-            }
-            .buttonStyle(.bordered)
-            .disabled(!bleManager.isConnected)
-
-            Button("Trigger Gate") {
-                bleManager.triggerGate(pin: authPin)
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(.green)
-            .disabled(!bleManager.isConnected)
-
-            Button("Refresh Status") {
-                bleManager.refreshStatus()
-            }
-            .buttonStyle(.bordered)
-            .disabled(!bleManager.isConnected)
-
-            Button("Disconnect") {
-                bleManager.disconnect()
-            }
-            .buttonStyle(.bordered)
-            .disabled(!bleManager.canDisconnect)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
+    private var primaryActionTitle: String {
+        bleManager.isConnected ? "Activate Gate" : "Find Nearby Gate"
     }
 
-    private var messageCard: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Last Message")
-                .font(.headline)
-            Text(bleManager.message)
-                .font(.body)
-        }
-        .padding()
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.background)
-        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+    private var primaryActionSymbol: String {
+        bleManager.isConnected ? "bolt.horizontal.circle.fill" : "dot.radiowaves.left.and.right"
     }
 
-    private func statusRow(title: String, value: String) -> some View {
-        HStack(alignment: .top) {
-            Text(title)
-                .fontWeight(.semibold)
-            Spacer(minLength: 16)
-            Text(value)
-                .multilineTextAlignment(.trailing)
-                .foregroundStyle(.secondary)
+    private var primaryActionDisabled: Bool {
+        bleManager.isConnected ? false : !bleManager.canStartScan
+    }
+
+    private var heroTitle: String {
+        if bleManager.isConnected {
+            return "Ready when you are"
         }
+
+        switch bleManager.connectionState.lowercased() {
+        case "scanning":
+            return "Looking nearby"
+        case "connecting", "discovering services":
+            return "Connecting"
+        case "disconnected":
+            return "Disconnected"
+        case "not found":
+            return "Gate not found"
+        default:
+            return "Nearby gate control"
+        }
+    }
+
+    private var heroSubtitle: String {
+        if bleManager.isConnected {
+            return "Sends a single momentary trigger, like pressing your remote."
+        }
+
+        switch bleManager.connectionState.lowercased() {
+        case "scanning":
+            return "Keep the phone close to the controller while Bluetooth scans."
+        case "not found":
+            return "Make sure the controller is powered, then try again."
+        default:
+            return "Connect over Bluetooth, then activate the gate from this iPhone."
+        }
+    }
+
+    private var heroSymbol: String {
+        bleManager.isConnected ? "checkmark.circle.fill" : "dot.radiowaves.left.and.right"
+    }
+
+    private var heroTint: Color {
+        bleManager.isConnected ? .green : .blue
+    }
+
+    private var connectionPresentation: StatusPresentation {
+        switch bleManager.connectionState.lowercased() {
+        case "connected":
+            return .init(title: "Connected", detail: "Your iPhone is linked to the gate controller.", tint: .green)
+        case "scanning":
+            return .init(title: "Searching", detail: "Looking for your gate controller nearby.", tint: .blue)
+        case "connecting", "discovering services":
+            return .init(title: "Connecting", detail: "Finishing the Bluetooth connection.", tint: .blue)
+        case "not found":
+            return .init(title: "Not Found", detail: "The controller was not found nearby.", tint: .orange)
+        case "disconnected":
+            return .init(title: "Disconnected", detail: "Reconnect when you want to use the gate again.", tint: .secondary)
+        case "connect failed", "service discovery failed", "characteristic discovery failed", "wrong device":
+            return .init(title: "Problem", detail: "The connection did not finish successfully.", tint: .red)
+        default:
+            return .init(title: bleManager.connectionState, detail: "Bluetooth is used only for local, nearby control.", tint: .secondary)
+        }
+    }
+
+    private var controllerPresentation: StatusPresentation {
+        switch bleManager.controllerStatus.lowercased() {
+        case "ready":
+            return .init(title: "Ready", detail: "The controller can accept a gate trigger now.", tint: .green)
+        case "pulsing":
+            return .init(title: "Activating", detail: "The relay is currently sending the momentary trigger.", tint: .blue)
+        case "cooldown":
+            return .init(title: "Waiting", detail: "A short safety pause is active before the next trigger.", tint: .orange)
+        case "locked":
+            return .init(title: "Locked", detail: "Too many failed attempts. Wait for the lockout to end.", tint: .red)
+        case "busy":
+            return .init(title: "Busy", detail: "The controller is handling another action right now.", tint: .orange)
+        case "bad-command":
+            return .init(title: "Needs Attention", detail: "The controller rejected the last command.", tint: .red)
+        default:
+            return .init(title: "Checking", detail: "Status updates appear here once connected.", tint: .secondary)
+        }
+    }
+
+    private var authPresentation: StatusPresentation {
+        switch bleManager.authStatus.lowercased() {
+        case "authorized":
+            return .init(title: "Unlocked", detail: "This phone can activate the gate for a short time.", tint: .green)
+        case "required":
+            return .init(title: "Protected", detail: "Enter your passphrase, then unlock before use.", tint: .orange)
+        case "denied":
+            return .init(title: "Denied", detail: "The passphrase did not match. Try again after the brief delay.", tint: .red)
+        case "disabled":
+            return .init(title: "Off", detail: "No passphrase is required on the controller right now.", tint: .secondary)
+        default:
+            return .init(title: "Checking", detail: "Security status appears here once connected.", tint: .secondary)
+        }
+    }
+
+    @ViewBuilder
+    private func statusBadge(_ presentation: StatusPresentation) -> some View {
+        Text(presentation.title)
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(presentation.tint)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(presentation.tint.opacity(0.14))
+            .clipShape(Capsule(style: .continuous))
+    }
+}
+
+private struct StatusPresentation {
+    let title: String
+    let detail: String
+    let tint: Color
+}
+
+private extension GateBLEManager {
+    var deviceInfoDisplay: String {
+        deviceInfo == "unknown" ? "Checking" : deviceInfo
     }
 }
