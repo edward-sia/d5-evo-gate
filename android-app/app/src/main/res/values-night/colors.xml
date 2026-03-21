@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="seed">#0A84FF</color>
+    <color name="surface">#1C1C1E</color>
+    <color name="surfaceAlt">#000000</color>
+    <color name="surfaceVariant">#2C2C2E</color>
+    <color name="onSurface">#F5F5F7</color>
+    <color name="onSurfaceMuted">#8E8E93</color>
+    <color name="statusBlue">#0A84FF</color>
+    <color name="statusGreen">#30D158</color>
+    <color name="statusOrange">#FF9F0A</color>
+    <color name="statusRed">#FF453A</color>
+    <color name="statusMuted">#8E8E93</color>
+</resources>
