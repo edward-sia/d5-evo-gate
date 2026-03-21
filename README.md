@@ -148,6 +148,7 @@ Use local overrides instead of editing the shared defaults:
 5. Only change `D5_EVO_RELAY_ACTIVE_LEVEL` if your relay energizes immediately on boot.
 
 The firmware automatically includes `app_config_local.h` when present.
+That file is git-ignored so your real auth secret stays local and is not committed.
 
 ## Build and flash the ESP32
 
@@ -199,6 +200,7 @@ Build steps:
 2. Let Gradle sync.
 3. Install the app on an Android phone with BLE.
 4. Enter the same PIN or passphrase you set in `app_config_local.h`, if any.
+   The app does not store it persistently.
 5. Connect and trigger.
 
 ## iPhone app
@@ -216,6 +218,7 @@ Build steps:
 2. Select your Apple development team for signing if you want to install on a real iPhone.
 3. Build and run.
 4. Enter the same PIN or passphrase you set in `app_config_local.h`, if any.
+   The app does not store it persistently.
 5. Connect and trigger.
 
 ## Removed from this repo

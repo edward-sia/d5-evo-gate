@@ -222,9 +222,6 @@ class MainActivity : AppCompatActivity() {
         val bluetoothManager = getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
         bluetoothAdapter = bluetoothManager.adapter
 
-        val preferences = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
-        pinInput.setText(preferences.getString(PREF_PIN, ""))
-
         connectButton.setOnClickListener {
             if (hasAllPermissions()) {
                 startScanAndConnect()
@@ -234,12 +231,10 @@ class MainActivity : AppCompatActivity() {
         }
 
         authenticateButton.setOnClickListener {
-            rememberPin()
             authenticate()
         }
 
         triggerButton.setOnClickListener {
-            rememberPin()
             triggerGate()
         }
 
@@ -402,13 +397,6 @@ class MainActivity : AppCompatActivity() {
         authStatusCharacteristic = null
         authChallenge = ""
         clearPendingAuthRequest()
-    }
-
-    private fun rememberPin() {
-        getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
-            .edit()
-            .putString(PREF_PIN, pinInput.text.toString().trim())
-            .apply()
     }
 
     private fun requiredPermissions(): Array<String> =
@@ -600,8 +588,6 @@ class MainActivity : AppCompatActivity() {
     }
 
     companion object {
-        private const val PREFS_NAME = "d5_evo_ble_gate"
-        private const val PREF_PIN = "auth_pin"
         private const val SCAN_TIMEOUT_MS = 10_000L
         private const val AUTH_HASH_ROUNDS = 2048
 

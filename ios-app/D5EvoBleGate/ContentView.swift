@@ -2,7 +2,7 @@ import SwiftUI
 
 struct ContentView: View {
     @EnvironmentObject private var bleManager: GateBLEManager
-    @AppStorage("authPin") private var authPin = ""
+    @State private var authPin = ""
 
     var body: some View {
         NavigationStack {
@@ -48,7 +48,7 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("PIN or Passphrase")
                 .font(.headline)
-            SecureField("PIN or passphrase from app_config_local.h", text: $authPin)
+            SecureField("PIN or passphrase from app_config_local.h (not stored)", text: $authPin)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
                 .padding(12)
