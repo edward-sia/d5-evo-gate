@@ -35,11 +35,17 @@ final class GateBLEManager: NSObject, ObservableObject {
         case read(CBUUID)
     }
 
+    private enum InFlightOperation {
+        case write(CBUUID)
+        case read(CBUUID)
+    }
+
     private lazy var centralManager = CBCentralManager(delegate: self, queue: nil)
     private var peripheral: CBPeripheral?
     private var characteristics: [CBUUID: CBCharacteristic] = [:]
     private var operationQueue: [Operation] = []
     private var operationInFlight = false
+    private var inFlightOperation: InFlightOperation?
     private var isScanning = false
     private var scanTimeoutTask: Task<Void, Never>?
 
@@ -103,6 +109,7 @@ final class GateBLEManager: NSObject, ObservableObject {
         scanTimeoutTask = nil
         operationQueue.removeAll()
         operationInFlight = false
+        inFlightOperation = nil
 
         guard let peripheral else {
             connectionState = "Idle"
@@ -159,6 +166,7 @@ final class GateBLEManager: NSObject, ObservableObject {
 
             guard let data = command.data(using: .utf8) else { return }
             operationInFlight = true
+            inFlightOperation = .write(characteristic.uuid)
             peripheral.writeValue(data, for: characteristic, type: .withResponse)
 
         case .read(let uuid):
@@ -169,6 +177,7 @@ final class GateBLEManager: NSObject, ObservableObject {
             }
 
             operationInFlight = true
+            inFlightOperation = .read(characteristic.uuid)
             peripheral.readValue(for: characteristic)
         }
     }
@@ -178,6 +187,7 @@ final class GateBLEManager: NSObject, ObservableObject {
             operationQueue.removeFirst()
         }
         operationInFlight = false
+        inFlightOperation = nil
         runNextOperation()
     }
 
@@ -191,6 +201,7 @@ final class GateBLEManager: NSObject, ObservableObject {
         characteristics.removeAll()
         operationQueue.removeAll()
         operationInFlight = false
+        inFlightOperation = nil
         peripheral = nil
         controllerStatus = "unknown"
         authStatus = "unknown"
@@ -333,6 +344,11 @@ extension GateBLEManager: CBPeripheralDelegate {
 
             for characteristic in service.characteristics ?? [] {
                 self.characteristics[characteristic.uuid] = characteristic
+
+                if characteristic.uuid == Self.controllerStatusCharacteristicUUID ||
+                    characteristic.uuid == Self.authStatusCharacteristicUUID {
+                    peripheral.setNotifyValue(true, for: characteristic)
+                }
             }
 
             self.connectionState = "Connected"
@@ -350,11 +366,12 @@ extension GateBLEManager: CBPeripheralDelegate {
             if let error {
                 self.message = error.localizedDescription
             } else {
-                let command = String(data: characteristic.value ?? Data(), encoding: .utf8) ?? "command"
-                self.message = "Sent \(command)."
+                self.message = "Command sent."
                 self.enqueueStatusRefresh()
             }
-            self.completeOperation()
+            if case .write(let uuid)? = self.inFlightOperation, uuid == characteristic.uuid {
+                self.completeOperation()
+            }
         }
     }
 
@@ -370,7 +387,26 @@ extension GateBLEManager: CBPeripheralDelegate {
                 let value = String(data: characteristic.value ?? Data(), encoding: .utf8) ?? "unknown"
                 self.updateValue(value, for: characteristic.uuid)
             }
-            self.completeOperation()
+            if case .read(let uuid)? = self.inFlightOperation, uuid == characteristic.uuid {
+                self.completeOperation()
+            }
+        }
+    }
+
+    nonisolated func peripheral(
+        _ peripheral: CBPeripheral,
+        didUpdateNotificationStateFor characteristic: CBCharacteristic,
+        error: Error?
+    ) {
+        Task { @MainActor in
+            if let error {
+                self.message = error.localizedDescription
+                return
+            }
+
+            if characteristic.isNotifying {
+                self.message = "Live status updates enabled."
+            }
         }
     }
 }
