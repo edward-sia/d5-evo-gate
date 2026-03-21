@@ -246,7 +246,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun triggerGate() {
         if (authValue.text.toString() == "disabled" || authValue.text.toString() == "authorized") {
-            enqueueCommand("TRIGGER")
+            enqueueCommand("PED")
             return
         }
 
@@ -303,7 +303,7 @@ class MainActivity : AppCompatActivity() {
                 setMessage("Authentication accepted.")
                 if (pendingTriggerAfterAuth) {
                     pendingTriggerAfterAuth = false
-                    enqueueCommand("TRIGGER")
+                    enqueueCommand("PED")
                 }
             }
 

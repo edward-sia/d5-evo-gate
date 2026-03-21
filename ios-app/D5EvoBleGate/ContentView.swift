@@ -88,12 +88,12 @@ struct ContentView: View {
 
     private var primaryTitle: String {
         if !bleManager.isConnected {
-            return "Nearby control"
+            return "Pedestrian access"
         }
 
         switch bleManager.controllerStatus.lowercased() {
         case "pulsing":
-            return "Opening"
+            return "Opening partway"
         case "cooldown":
             return "Please wait"
         default:
@@ -102,7 +102,7 @@ struct ContentView: View {
     }
 
     private var primaryButtonTitle: String {
-        bleManager.isConnected ? "Open Gate" : "Connect"
+        bleManager.isConnected ? "Pedestrian" : "Connect"
     }
 
     private var primaryDisabled: Bool {

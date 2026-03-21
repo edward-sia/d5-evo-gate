@@ -1,4 +1,4 @@
-# D5-Evo BLE Gate Trigger
+# D5-Evo BLE Pedestrian Trigger
 
 This project is now trimmed to the exact hardware set below:
 
@@ -19,8 +19,8 @@ The repository contains:
 This codebase supports one job only:
 
 - the ESP32 drives one 5V relay input from `GPIO23`
-- the relay closes a dry contact across D5-Evo `TRG` and `COM`
-- the phone connects locally over BLE and sends `TRIGGER`
+- the relay closes a dry contact across D5-Evo `PED` and `COM`
+- the phone connects locally over BLE and sends `PED`
 
 This codebase does not include:
 
@@ -60,7 +60,7 @@ Gate power to buck converter:
 Relay dry contact:
 
 - relay `COM` -> D5-Evo `COM`
-- relay `NO` -> D5-Evo `TRG`
+- relay `NO` -> D5-Evo `PED`
 
 Important:
 
@@ -82,7 +82,7 @@ Neither breadboard is recommended as the final installed gate controller assembl
 The ESP32 firmware:
 
 - advertises as `D5-EVO-Gate` by default
-- exposes one BLE command path for `AUTHRESP <hex>` and `TRIGGER`
+- exposes one BLE command path for `AUTHRESP <hex>` and `PED`
 - exposes a dedicated auth challenge characteristic so the phone can sign the challenge locally
 - pulses the relay for `500 ms`
 - enforces a `5 second` cooldown
@@ -122,7 +122,7 @@ Characteristics:
 Supported write commands:
 
 - `AUTHRESP <hex>`
-- `TRIGGER`
+- `PED`
 
 Auth protocol:
 
@@ -196,18 +196,18 @@ Do this before any connection to the D5-Evo:
 5. Open the Android or iPhone app.
 6. Connect to the BLE device.
 7. If you enabled auth, enter the same passphrase you set in `app_config_local.h`.
-8. Tap `Open Gate`, or let the app authenticate first if needed.
+8. Tap the pedestrian button and let the app authenticate first, if needed.
 9. Confirm one clean relay click.
 10. Confirm an immediate second press shows cooldown behavior.
 
-After that passes, connect relay `COM` and `NO` to the D5-Evo `COM` and `TRG`.
+After that passes, connect relay `COM` and `NO` to the D5-Evo `COM` and `PED`.
 
 ## Android app
 
 The Android app in [`android-app`](android-app) is now aligned to the exact supported hardware:
 
 - connect
-- trigger relay
+- send pedestrian open
 - read controller/auth/challenge/info state
 
 Build steps:
@@ -224,7 +224,7 @@ Build steps:
 The iPhone app in [`ios-app`](ios-app) is aligned to the same BLE flow:
 
 - connect
-- trigger relay
+- send pedestrian open
 - read controller/auth/challenge/info state
 
 Build steps:

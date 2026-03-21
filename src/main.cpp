@@ -120,11 +120,11 @@ void refreshInfoValue() {
 
   String value;
   if (!authEnabled()) {
-    value = "Write TRIGGER";
+    value = "Write PED";
   } else if (authLockoutActive(millis())) {
     value = "Wait for auth retry window, then read challenge again";
   } else {
-    value = "Read challenge, write AUTHRESP <hex>, then TRIGGER";
+    value = "Read challenge, write AUTHRESP <hex>, then PED";
   }
 
   g_infoChar->setValue(value.c_str());
@@ -197,7 +197,7 @@ bool cooldownActive(unsigned long nowMs) {
   return nowMs < g_cooldownUntilMs;
 }
 
-bool triggerRelay() {
+bool pulsePedestrianRelay() {
   const unsigned long nowMs = millis();
   if (g_relayActive) {
     setControllerStatus("busy");
@@ -214,7 +214,7 @@ bool triggerRelay() {
   g_relayStartedAtMs = nowMs;
   g_cooldownUntilMs = nowMs + AppConfig::kCooldownMs;
   setControllerStatus("pulsing");
-  Serial.println("Gate pulse started");
+  Serial.println("Pedestrian pulse started");
   return true;
 }
 
@@ -304,13 +304,13 @@ class CommandCallbacks : public BLECharacteristicCallbacks {
       return;
     }
 
-    if (normalized == "TRIGGER") {
+    if (normalized == "PED" || normalized == "TRIGGER") {
       if (authEnabled() && !authWindowActive(millis())) {
         setControllerStatus("locked");
         syncAuthStatus();
         return;
       }
-      triggerRelay();
+      pulsePedestrianRelay();
       return;
     }
 
@@ -373,7 +373,7 @@ void updateRelayPulse() {
   digitalWrite(AppConfig::kRelayPin, relayInactiveLevel());
   g_relayActive = false;
   setControllerStatus(cooldownActive(nowMs) ? "cooldown" : "ready");
-  Serial.println("Gate pulse ended");
+  Serial.println("Pedestrian pulse ended");
 }
 
 void updateCooldown() {
@@ -404,7 +404,7 @@ void updateAuthState() {
 
 void printStartupSummary() {
   Serial.println();
-  Serial.println("D5-Evo BLE Gate");
+  Serial.println("D5-Evo BLE Pedestrian");
   Serial.printf("Device name: %s\n", AppConfig::kDeviceName);
   Serial.printf("Relay pin: GPIO%d\n", AppConfig::kRelayPin);
   Serial.printf("Relay trigger level: %s\n",
@@ -416,7 +416,7 @@ void printStartupSummary() {
     Serial.printf("Auth session: %lu ms\n", AppConfig::kAuthSessionMs);
     Serial.printf("Auth lockout: %lu ms\n", AppConfig::kAuthLockoutMs);
   }
-  Serial.println("Bench test flow: connect phone app -> authenticate -> trigger relay");
+  Serial.println("Bench test flow: connect phone app -> authenticate -> pulse PED relay");
 }
 
 }  // namespace

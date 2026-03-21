@@ -89,7 +89,7 @@ final class GateBLEManager: NSObject, ObservableObject {
 
     func triggerGate() {
         if authStatus == "disabled" || authStatus == "authorized" {
-            enqueueWrite("TRIGGER")
+            enqueueWrite("PED")
             return
         }
 
@@ -297,7 +297,7 @@ final class GateBLEManager: NSObject, ObservableObject {
             message = "Unlocked for a short time."
             if pendingTriggerAfterAuth {
                 pendingTriggerAfterAuth = false
-                enqueueWrite("TRIGGER")
+                enqueueWrite("PED")
             }
         case "denied":
             clearPendingAuthRequest()
