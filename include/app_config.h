@@ -32,6 +32,10 @@ namespace AppConfig {
 #define D5_EVO_AUTH_LOCKOUT_MS 15000UL
 #endif
 
+#ifndef D5_EVO_BLE_CLIENT_IDLE_TIMEOUT_MS
+#define D5_EVO_BLE_CLIENT_IDLE_TIMEOUT_MS 60000UL
+#endif
+
 #ifndef D5_EVO_DEVICE_NAME
 #define D5_EVO_DEVICE_NAME "D5-EVO-Gate"
 #endif
@@ -49,6 +53,7 @@ constexpr unsigned long kRelayPulseMs = D5_EVO_RELAY_PULSE_MS;
 constexpr unsigned long kCooldownMs = D5_EVO_COOLDOWN_MS;
 constexpr unsigned long kAuthSessionMs = D5_EVO_AUTH_SESSION_MS;
 constexpr unsigned long kAuthLockoutMs = D5_EVO_AUTH_LOCKOUT_MS;
+constexpr unsigned long kBleClientIdleTimeoutMs = D5_EVO_BLE_CLIENT_IDLE_TIMEOUT_MS;
 
 constexpr char kDeviceName[] = D5_EVO_DEVICE_NAME;
 

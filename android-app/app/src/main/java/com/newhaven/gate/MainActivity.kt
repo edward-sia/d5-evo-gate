@@ -242,6 +242,11 @@ class MainActivity : AppCompatActivity() {
         disconnectGatt()
     }
 
+    override fun onStop() {
+        super.onStop()
+        disconnectGatt()
+    }
+
     private fun triggerGate() {
         if (authStatus == "disabled" || authStatus == "authorized") {
             enqueueCommand("PED")

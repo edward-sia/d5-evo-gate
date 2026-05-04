@@ -8,6 +8,7 @@ Android-specific guidance for the D5-Evo BLE Pedestrian Trigger.
 - The firmware owns relay timing, cooldown, and auth lockout.
 - Android writes `AUTHRESP <hex>` and `PED`; it does not directly model relay wiring.
 - GATT operations stay serialized.
+- Backgrounded activities should release the BLE connection.
 - Runtime BLE permission handling must support Android 12+ and older Android versions.
 
 ## Useful Files

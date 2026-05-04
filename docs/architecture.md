@@ -41,6 +41,9 @@ flowchart LR
 The ESP32 firmware is the only component that touches physical control. Mobile
 apps do not know relay timing, cooldown timing, or pin polarity. They connect
 over BLE, read status, sign an auth challenge when needed, and write commands.
+The firmware also owns BLE connection recovery: if a client stays connected
+without GATT reads or writes for the idle timeout, the ESP32 clears auth state
+and disconnects that client so advertising can resume for another phone.
 
 ## Repository Architecture
 
@@ -81,6 +84,11 @@ flowchart TB
 | Auth challenge | `4b8c2ec4-3f66-4f00-8a43-95f79d2c0cc4` | Firmware | Apps read before signing. |
 | Info | `4b8c2ec4-3f66-4f00-8a43-95f79d2c0cc5` | Firmware | Apps read user-facing guidance. |
 | Auth status | `4b8c2ec4-3f66-4f00-8a43-95f79d2c0cc6` | Firmware | Apps read/subscribe. |
+
+The default `D5_EVO_BLE_CLIENT_IDLE_TIMEOUT_MS` is `60000 ms`. Reads and writes
+refresh the firmware-side client activity timer; notifications do not. Mobile
+apps also disconnect when they leave the foreground so the firmware timeout is a
+backup for killed, locked, or unreachable clients.
 
 ## Trigger Sequence
 
@@ -160,6 +168,7 @@ Auth rules:
 - A successful auth session lasts `30000 ms` by default.
 - A failed auth attempt starts a `15000 ms` lockout by default.
 - The challenge rotates after every auth attempt and on BLE connect/disconnect.
+- Idle BLE client timeout clears any active auth session before disconnecting the client.
 
 ## Auth Response Algorithm
 
@@ -215,6 +224,7 @@ Both mobile apps follow the same control contract:
 4. Refresh status in a serialized BLE operation queue.
 5. If auth is required, sign the challenge locally.
 6. Write `PED`.
+7. Disconnect when the app leaves the foreground.
 
 ## Build And Verification Matrix
 

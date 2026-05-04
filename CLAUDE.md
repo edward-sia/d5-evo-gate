@@ -12,6 +12,7 @@ clients only.
 - One supported hardware path: 38-pin ESP32 USB-C board, LM2596 buck regulator, 5V optocoupled relay.
 - Relay control stays on `GPIO23`.
 - Relay behavior stays momentary and firmware-controlled.
+- Stale BLE clients must not be allowed to reserve the controller indefinitely.
 - Mobile apps write `PED`; firmware also currently accepts legacy `TRIGGER`.
 - UUIDs, auth label, and hash rounds must stay identical across firmware, Android, and iOS.
 - Real local auth secrets must stay ignored and out of commits.

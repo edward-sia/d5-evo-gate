@@ -8,6 +8,7 @@ iOS-specific guidance for the D5-Evo BLE Pedestrian Trigger.
 - The ESP32 firmware owns relay timing, cooldown, and auth lockout.
 - iOS writes `AUTHRESP <hex>` and `PED`; it does not directly model relay wiring.
 - CoreBluetooth operations stay serialized through `GateBLEManager`.
+- Foreground scene changes should release the BLE connection.
 - `ContentView` should stay focused on presentation.
 
 ## Useful Files

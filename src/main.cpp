@@ -13,13 +13,18 @@ constexpr char kAuthVersionLabel[] = "D5-EVO-AUTH-V1|";
 constexpr size_t kAuthChallengeBytes = 16;
 constexpr size_t kAuthDigestBytes = 32;
 constexpr uint16_t kAuthHashRounds = 2048;
+constexpr uint16_t kNoBleConnection = 0xFFFF;
 constexpr char kHexDigits[] = "0123456789ABCDEF";
 
+BLEServer* g_bleServer = nullptr;
 BLECharacteristic* g_controllerStatusChar = nullptr;
 BLECharacteristic* g_authStatusChar = nullptr;
 BLECharacteristic* g_authChallengeChar = nullptr;
 BLECharacteristic* g_infoChar = nullptr;
 bool g_deviceConnected = false;
+bool g_bleDisconnectPending = false;
+uint16_t g_bleConnectionId = kNoBleConnection;
+unsigned long g_lastBleClientActivityMs = 0;
 bool g_relayActive = false;
 unsigned long g_relayStartedAtMs = 0;
 unsigned long g_cooldownUntilMs = 0;
@@ -48,6 +53,12 @@ bool authLockoutActive(unsigned long nowMs) {
 void notifyIfConnected(BLECharacteristic* characteristic) {
   if (g_deviceConnected && characteristic != nullptr) {
     characteristic->notify();
+  }
+}
+
+void markBleClientActivity() {
+  if (g_deviceConnected) {
+    g_lastBleClientActivityMs = millis();
   }
 }
 
@@ -267,7 +278,11 @@ String extractArgument(const String& command, const String& prefix) {
 class GateServerCallbacks : public BLEServerCallbacks {
  public:
   void onConnect(BLEServer* server) override {
+    g_bleServer = server;
     g_deviceConnected = true;
+    g_bleDisconnectPending = false;
+    g_bleConnectionId = server->getConnId();
+    g_lastBleClientActivityMs = millis();
     (void)server;
     g_authorizedUntilMs = 0;
     g_authLockoutUntilMs = 0;
@@ -275,11 +290,14 @@ class GateServerCallbacks : public BLEServerCallbacks {
     setControllerStatus(g_controllerStatus, false);
     syncAuthStatus(false);
     notifyIfConnected(g_authStatusChar);
-    Serial.println("BLE client connected");
+    Serial.printf("BLE client connected: conn_id=%u\n", g_bleConnectionId);
   }
 
   void onDisconnect(BLEServer* server) override {
     g_deviceConnected = false;
+    g_bleDisconnectPending = false;
+    g_bleConnectionId = kNoBleConnection;
+    g_lastBleClientActivityMs = 0;
     g_authorizedUntilMs = 0;
     g_authLockoutUntilMs = 0;
     syncAuthStatus(false);
@@ -290,9 +308,18 @@ class GateServerCallbacks : public BLEServerCallbacks {
   }
 };
 
+class ClientActivityCallbacks : public BLECharacteristicCallbacks {
+ public:
+  void onRead(BLECharacteristic* characteristic) override {
+    (void)characteristic;
+    markBleClientActivity();
+  }
+};
+
 class CommandCallbacks : public BLECharacteristicCallbacks {
  public:
   void onWrite(BLECharacteristic* characteristic) override {
+    markBleClientActivity();
     const String command = trimmedCommand(characteristic->getValue());
     String normalized = command;
     normalized.toUpperCase();
@@ -322,6 +349,7 @@ void initBle() {
   BLEDevice::init(AppConfig::kDeviceName);
 
   BLEServer* server = BLEDevice::createServer();
+  g_bleServer = server;
   server->setCallbacks(new GateServerCallbacks());
 
   BLEService* service = server->createService(AppConfig::kServiceUuid);
@@ -334,19 +362,23 @@ void initBle() {
       AppConfig::kControllerStatusCharUuid,
       BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
   g_controllerStatusChar->addDescriptor(new BLE2902());
+  g_controllerStatusChar->setCallbacks(new ClientActivityCallbacks());
   g_controllerStatusChar->setValue(g_controllerStatus.c_str());
 
   g_authChallengeChar = service->createCharacteristic(
       AppConfig::kAuthChallengeCharUuid, BLECharacteristic::PROPERTY_READ);
+  g_authChallengeChar->setCallbacks(new ClientActivityCallbacks());
   g_authChallengeChar->setValue(g_authChallengeHex.c_str());
 
   g_infoChar =
       service->createCharacteristic(AppConfig::kInfoCharUuid, BLECharacteristic::PROPERTY_READ);
+  g_infoChar->setCallbacks(new ClientActivityCallbacks());
 
   g_authStatusChar = service->createCharacteristic(
       AppConfig::kAuthStatusCharUuid,
       BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
   g_authStatusChar->addDescriptor(new BLE2902());
+  g_authStatusChar->setCallbacks(new ClientActivityCallbacks());
   g_authStatusChar->setValue(g_authStatus.c_str());
 
   generateAuthChallenge();
@@ -358,6 +390,26 @@ void initBle() {
   advertising->setScanResponse(true);
   advertising->start();
   Serial.println("BLE advertising started");
+}
+
+void updateBleClientLease() {
+  if (!g_deviceConnected || g_bleDisconnectPending ||
+      AppConfig::kBleClientIdleTimeoutMs == 0 || g_bleServer == nullptr ||
+      g_bleConnectionId == kNoBleConnection) {
+    return;
+  }
+
+  if (millis() - g_lastBleClientActivityMs < AppConfig::kBleClientIdleTimeoutMs) {
+    return;
+  }
+
+  g_authorizedUntilMs = 0;
+  g_authLockoutUntilMs = 0;
+  syncAuthStatus(false);
+  g_bleDisconnectPending = true;
+  Serial.printf("BLE client idle for %lu ms; disconnecting conn_id=%u\n",
+                AppConfig::kBleClientIdleTimeoutMs, g_bleConnectionId);
+  g_bleServer->disconnect(g_bleConnectionId);
 }
 
 void updateRelayPulse() {
@@ -412,6 +464,7 @@ void printStartupSummary() {
   Serial.printf("Relay pulse: %lu ms\n", AppConfig::kRelayPulseMs);
   Serial.printf("Cooldown: %lu ms\n", AppConfig::kCooldownMs);
   Serial.printf("Authentication: %s\n", authEnabled() ? "challenge-response" : "disabled");
+  Serial.printf("BLE client idle timeout: %lu ms\n", AppConfig::kBleClientIdleTimeoutMs);
   if (authEnabled()) {
     Serial.printf("Auth session: %lu ms\n", AppConfig::kAuthSessionMs);
     Serial.printf("Auth lockout: %lu ms\n", AppConfig::kAuthLockoutMs);
@@ -435,6 +488,7 @@ void setup() {
 }
 
 void loop() {
+  updateBleClientLease();
   updateRelayPulse();
   updateCooldown();
   updateAuthState();

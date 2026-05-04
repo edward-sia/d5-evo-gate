@@ -53,6 +53,7 @@ sequenceDiagram
         App->>Gatt: Refresh auth status
         App->>Gatt: Write PED after authorized
     end
+    App->>Gatt: Disconnect when activity stops
 ```
 
 ## Local Auth Setup
@@ -80,4 +81,5 @@ Use Android Studio for device install and BLE testing.
 - Keep `AUTH_HASH_ROUNDS = 2048` and auth label `D5-EVO-AUTH-V1|` in sync with firmware and iOS.
 - The operation queue is intentional; Android GATT operations should stay serialized.
 - Runtime permissions differ before and after Android 12. Preserve both paths.
+- Disconnect on activity stop so a backgrounded phone does not hold the ESP32 client slot.
 - Do not add open/close gate controls unless the firmware and docs are deliberately expanded beyond pedestrian access.

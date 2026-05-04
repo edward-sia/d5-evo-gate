@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ContentView: View {
     @EnvironmentObject private var bleManager: GateBLEManager
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         NavigationStack {
@@ -32,6 +33,11 @@ struct ContentView: View {
                         }
                     }
                 }
+            }
+        }
+        .onChange(of: scenePhase) { _, phase in
+            if phase != .active {
+                bleManager.disconnect()
             }
         }
     }

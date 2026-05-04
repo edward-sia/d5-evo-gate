@@ -50,6 +50,7 @@ sequenceDiagram
         Manager->>ESP32: Refresh auth status
         Manager->>ESP32: Write PED after authorized
     end
+    View->>Manager: Disconnect when scene leaves foreground
 ```
 
 ## Local Auth Setup
@@ -80,4 +81,5 @@ xcodebuild -project D5EvoBleGate.xcodeproj -scheme D5EvoBleGate -sdk iphonesimul
 - Keep auth hash rounds and label in sync with firmware and Android.
 - CoreBluetooth behavior must be tested on a real iPhone; simulator builds only prove compilation.
 - Keep `GateBLEManager` as the owner of BLE state and `ContentView` as presentation.
+- Disconnect when the app scene leaves the foreground so a locked phone releases the gate.
 - Do not add open/close gate controls unless the full firmware and documentation scope is deliberately expanded.

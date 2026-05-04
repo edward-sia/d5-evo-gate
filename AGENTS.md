@@ -40,6 +40,7 @@ that authenticate and write commands.
 - BLE service/characteristic creation
 - challenge generation with `esp_fill_random`
 - SHA-256 auth response validation
+- idle BLE client timeout and disconnect recovery
 - relay pulse start/end
 - cooldown and auth lockout state
 - serial startup summary

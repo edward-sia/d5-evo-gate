@@ -111,6 +111,7 @@ The ESP32 firmware:
 - enforces a `5 second` cooldown
 - rotates the auth challenge after every auth attempt and on connect/disconnect
 - locks auth retries for `15 seconds` after a failed response
+- disconnects an idle BLE client after `60 seconds` so a locked or closed phone does not reserve the controller indefinitely
 - publishes controller and auth status over BLE notifications where supported
 
 Controller status values:
@@ -166,10 +167,11 @@ file is deliberately created for convenience.
 3. Set `D5_EVO_AUTH_PIN` to a strong passphrase before live gate use.
 4. Optionally change `D5_EVO_DEVICE_NAME`.
 5. Change `D5_EVO_RELAY_ACTIVE_LEVEL` only if the relay energizes at idle.
-6. Connect the ESP32 by USB-C.
-7. Build with `pio run -e esp32-usb-c-38pin`.
-8. Upload with `pio run -e esp32-usb-c-38pin -t upload --upload-port /dev/cu.usbserial-XXXX`.
-9. Monitor with `pio device monitor -p /dev/cu.usbserial-XXXX -b 115200`.
+6. Optionally change `D5_EVO_BLE_CLIENT_IDLE_TIMEOUT_MS`; keep it finite so a stale phone connection can be released.
+7. Connect the ESP32 by USB-C.
+8. Build with `pio run -e esp32-usb-c-38pin`.
+9. Upload with `pio run -e esp32-usb-c-38pin -t upload --upload-port /dev/cu.usbserial-XXXX`.
+10. Monitor with `pio device monitor -p /dev/cu.usbserial-XXXX -b 115200`.
 
 This ESP32 board uses a CP2102 USB-to-UART bridge. On macOS the upload port is
 usually a `/dev/cu.usbserial-*` device.
@@ -180,7 +182,8 @@ The Android app is in [`android-app`](android-app).
 
 It scans for the custom service UUID, connects with `BluetoothGatt`, resolves
 the five characteristics, reads status in a queued operation flow, signs the
-challenge locally with `MessageDigest`, and writes `PED`.
+challenge locally with `MessageDigest`, writes `PED`, and disconnects when the
+activity is no longer visible.
 
 Build steps:
 
@@ -206,7 +209,8 @@ The iPhone app is in [`ios-app`](ios-app).
 
 It scans with CoreBluetooth for the same custom service UUID, discovers the five
 characteristics, enables notifications for status, signs the challenge locally
-with CryptoKit, and writes `PED`.
+with CryptoKit, writes `PED`, and disconnects when the app scene leaves the
+active foreground.
 
 Build steps:
 

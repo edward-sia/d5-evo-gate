@@ -18,6 +18,7 @@ and writes commands; it does not own physical relay behavior.
 - Write `PED` for the pedestrian trigger.
 - Keep the auth algorithm identical to firmware and Android.
 - Keep CoreBluetooth operations serialized through the manager queue.
+- Disconnect when the app scene leaves the foreground so backgrounded phones release the gate.
 - Keep local passphrase config in ignored `D5EvoBleGate/Config/LocalSecrets.xcconfig`.
 
 ## Check

@@ -13,6 +13,7 @@
 #define D5_EVO_COOLDOWN_MS 5000UL
 #define D5_EVO_AUTH_SESSION_MS 30000UL
 #define D5_EVO_AUTH_LOCKOUT_MS 15000UL
+#define D5_EVO_BLE_CLIENT_IDLE_TIMEOUT_MS 60000UL
 
 // Personalize these before live use.
 // Prefer a passphrase over a short PIN because it is easier to enter on a phone

@@ -18,6 +18,7 @@ and writes, the serialized operation queue, auth signing, and UI state.
 - Write `PED` for the pedestrian trigger.
 - Keep the auth algorithm identical to firmware and iOS.
 - Keep GATT operations serialized through the queue.
+- Disconnect when the activity stops so backgrounded phones release the gate.
 - Keep local passphrase config in ignored `gate.local.properties`.
 - Do not commit `local.properties` or `gate.local.properties`.
 
