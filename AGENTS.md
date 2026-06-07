@@ -21,6 +21,7 @@ that authenticate and write commands.
 - The supported command is pedestrian access through D5-Evo `PED` and `COM`.
 - Do not add gate-position sensing, `FRX`, `Status` input, or alternate board support unless explicitly requested.
 - Keep relay control momentary.
+- Keep the default relay polarity active-high unless bench evidence shows the relay is energized at idle.
 - Keep firmware relay timing and cooldown authoritative.
 - Keep the firmware, Android, and iOS BLE UUIDs in sync.
 - Keep the auth label `D5-EVO-AUTH-V1|` and `2048` hash rounds in sync across firmware, Android, and iOS.

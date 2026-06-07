@@ -6,7 +6,7 @@
 // Common working defaults for the 38-pin USB-C ESP32 board and a single
 // optocoupled 5V relay module.
 #define D5_EVO_RELAY_PIN 23
-#define D5_EVO_RELAY_ACTIVE_LEVEL LOW
+#define D5_EVO_RELAY_ACTIVE_LEVEL HIGH
 
 // Recommended starting values for a personal local-only install.
 #define D5_EVO_RELAY_PULSE_MS 500UL

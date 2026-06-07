@@ -19,7 +19,7 @@ gate-control job so the installed behavior stays easy to reason about.
 The firmware assumes:
 
 - relay control on ESP32 `GPIO23`
-- active-low relay input by default
+- active-high relay input by default
 - momentary relay pulse across D5-Evo `PED` and `COM`
 - no gate-position sensing
 - no D5-Evo `Status` input
@@ -47,7 +47,7 @@ flowchart LR
     Phone["Android or iPhone app"] -->|"BLE scan by service UUID"| ESP32["ESP32 BLE controller"]
     Phone -->|"Read challenge/status/info"| ESP32
     Phone -->|"Write AUTHRESP <hex> then PED"| ESP32
-    ESP32 -->|"GPIO23 active-low pulse"| Relay["5V optocoupled relay"]
+    ESP32 -->|"GPIO23 active-high pulse"| Relay["5V optocoupled relay"]
     Relay -->|"Dry contact closes for 500 ms"| Gate["D5-Evo PED + COM"]
     Gate -->|"Pedestrian open cycle"| Motor["Gate opener"]
 ```
@@ -78,7 +78,8 @@ Relay control:
 Bench-test rule:
 
 - Do not connect relay `COM` and `NO` to the D5-Evo during first relay tests.
-- A successful phone trigger should make one relay click for about `500 ms`.
+- At idle, relay `COM` to `NO` must be open.
+- A successful phone trigger should close `COM` to `NO` for about `500 ms`.
 
 ### Final D5-Evo Connection
 
@@ -166,7 +167,7 @@ file is deliberately created for convenience.
 2. Copy `include/app_config_local.example.h` to `include/app_config_local.h`.
 3. Set `D5_EVO_AUTH_PIN` to a strong passphrase before live gate use.
 4. Optionally change `D5_EVO_DEVICE_NAME`.
-5. Change `D5_EVO_RELAY_ACTIVE_LEVEL` only if the relay energizes at idle.
+5. Change `D5_EVO_RELAY_ACTIVE_LEVEL` only if the relay energizes at idle or `COM` to `NO` is closed at idle.
 6. Optionally change `D5_EVO_BLE_CLIENT_IDLE_TIMEOUT_MS`; keep it finite so a stale phone connection can be released.
 7. Connect the ESP32 by USB-C.
 8. Build with `pio run -e esp32-usb-c-38pin`.

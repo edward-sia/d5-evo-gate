@@ -13,7 +13,7 @@ namespace AppConfig {
 #endif
 
 #ifndef D5_EVO_RELAY_ACTIVE_LEVEL
-#define D5_EVO_RELAY_ACTIVE_LEVEL LOW
+#define D5_EVO_RELAY_ACTIVE_LEVEL HIGH
 #endif
 
 #ifndef D5_EVO_RELAY_PULSE_MS

@@ -41,6 +41,8 @@ flowchart LR
 The ESP32 firmware is the only component that touches physical control. Mobile
 apps do not know relay timing, cooldown timing, or pin polarity. They connect
 over BLE, read status, sign an auth challenge when needed, and write commands.
+The default relay polarity is active-high on `GPIO23`; at idle, relay `COM` to
+`NO` must be open.
 The firmware also owns BLE connection recovery: if a client stays connected
 without GATT reads or writes for the idle timeout, the ESP32 clears auth state
 and disconnects that client so advertising can resume for another phone.
@@ -239,6 +241,7 @@ Both mobile apps follow the same control contract:
 
 - Build success does not prove safe wiring.
 - BLE app success does not prove relay polarity is correct.
+- Relay `COM` to `NO` must be open at idle and close only during the firmware pulse.
 - The LM2596 must be adjusted to `5.0V` before powering ESP32 or relay.
 - Relay output must remain momentary.
 - Existing D5-Evo safety wiring must remain untouched.

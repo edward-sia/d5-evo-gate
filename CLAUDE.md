@@ -11,6 +11,7 @@ clients only.
 
 - One supported hardware path: 38-pin ESP32 USB-C board, LM2596 buck regulator, 5V optocoupled relay.
 - Relay control stays on `GPIO23`.
+- Default relay polarity is active-high and must leave relay `COM` to `NO` open at idle.
 - Relay behavior stays momentary and firmware-controlled.
 - Stale BLE clients must not be allowed to reserve the controller indefinitely.
 - Mobile apps write `PED`; firmware also currently accepts legacy `TRIGGER`.
