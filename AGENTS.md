@@ -68,11 +68,16 @@ pio device monitor -p /dev/cu.usbserial-XXXX -b 115200
 - local auth response calculation
 - compact status presentation
 
+Android 12+ uses `BLUETOOTH_SCAN` and `BLUETOOTH_CONNECT`; Android 11 and older
+use `ACCESS_FINE_LOCATION` for BLE scanning. Guard direct BLE API calls so a
+denied or revoked permission cannot crash the app.
+
 Local Android auto-auth config is read from ignored `android-app/gate.local.properties`.
 
 Relevant check:
 
 ```bash
+cd android-app && ./gradlew testDebugUnitTest --tests com.newhaven.gate.BlePermissionPolicyTest
 cd android-app && ./gradlew assembleDebug
 ```
 

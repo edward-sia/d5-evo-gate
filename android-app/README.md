@@ -18,6 +18,8 @@ signs the auth challenge when configured, and writes `PED`.
 | Path | Purpose |
 | --- | --- |
 | `app/src/main/java/com/newhaven/gate/MainActivity.kt` | BLE scanning, connection, serialized GATT operations, auth response, UI state. |
+| `app/src/main/java/com/newhaven/gate/BlePermissionPolicy.java` | Android runtime permission split for BLE scan/connect. |
+| `app/src/test/java/com/newhaven/gate/BlePermissionPolicyTest.java` | JVM tests for Android 12+ and legacy BLE permission requirements. |
 | `app/src/main/AndroidManifest.xml` | BLE feature and runtime permission declarations. |
 | `app/src/main/res/layout/activity_main.xml` | Single-screen gate control UI. |
 | `app/src/main/res/values/strings.xml` | User-facing strings. |
@@ -56,6 +58,20 @@ sequenceDiagram
     App->>Gatt: Disconnect when activity stops
 ```
 
+## Runtime Permissions
+
+The manifest declares legacy Bluetooth/location permissions through Android 11
+and Android 12+ Nearby devices permissions separately.
+
+- Android 12 and newer request `BLUETOOTH_SCAN` and `BLUETOOTH_CONNECT`.
+- Android 11 and older request `ACCESS_FINE_LOCATION` for BLE scanning.
+
+The activity checks permission before starting scans, reading device labels,
+connecting with `BluetoothGatt`, refreshing status, writing commands, stopping
+scans, or disconnecting. If permission is denied or revoked while BLE is active,
+the app clears local BLE state and shows `Permission needed` instead of calling
+the Android BLE API without permission.
+
 ## Local Auth Setup
 
 For local development builds that should auto-auth:
@@ -75,11 +91,17 @@ connect and read status but will not trigger the gate.
 
 Use Android Studio for device install and BLE testing.
 
+Focused permission-policy test:
+
+```bash
+./gradlew testDebugUnitTest --tests com.newhaven.gate.BlePermissionPolicyTest
+```
+
 ## Agent Notes
 
 - Keep BLE UUIDs in sync with `include/app_config.h` and the iOS manager.
 - Keep `AUTH_HASH_ROUNDS = 2048` and auth label `D5-EVO-AUTH-V1|` in sync with firmware and iOS.
 - The operation queue is intentional; Android GATT operations should stay serialized.
-- Runtime permissions differ before and after Android 12. Preserve both paths.
+- Runtime permissions differ before and after Android 12. Preserve both paths and guard direct BLE API calls.
 - Disconnect on activity stop so a backgrounded phone does not hold the ESP32 client slot.
 - Do not add open/close gate controls unless the firmware and docs are deliberately expanded beyond pedestrian access.

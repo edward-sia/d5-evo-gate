@@ -184,7 +184,9 @@ The Android app is in [`android-app`](android-app).
 It scans for the custom service UUID, connects with `BluetoothGatt`, resolves
 the five characteristics, reads status in a queued operation flow, signs the
 challenge locally with `MessageDigest`, writes `PED`, and disconnects when the
-activity is no longer visible.
+activity is no longer visible. Android 12+ builds request Nearby devices
+permissions (`BLUETOOTH_SCAN` and `BLUETOOTH_CONNECT`); Android 11 and older
+use `ACCESS_FINE_LOCATION` for BLE scanning.
 
 Build steps:
 
@@ -199,6 +201,7 @@ Command-line build:
 
 ```bash
 cd android-app
+./gradlew testDebugUnitTest --tests com.newhaven.gate.BlePermissionPolicyTest
 ./gradlew assembleDebug
 ```
 
@@ -248,6 +251,7 @@ Use the smallest relevant check for the subsystem you touched:
 
 ```bash
 pio run -e esp32-usb-c-38pin
+cd android-app && ./gradlew testDebugUnitTest --tests com.newhaven.gate.BlePermissionPolicyTest
 cd android-app && ./gradlew assembleDebug
 xcodebuild -project ios-app/D5EvoBleGate.xcodeproj -scheme D5EvoBleGate -sdk iphonesimulator -configuration Debug build
 ```

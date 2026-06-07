@@ -10,10 +10,13 @@ Android-specific guidance for the D5-Evo BLE Pedestrian Trigger.
 - GATT operations stay serialized.
 - Backgrounded activities should release the BLE connection.
 - Runtime BLE permission handling must support Android 12+ and older Android versions.
+- Android 12+ BLE calls must be guarded by `BLUETOOTH_SCAN` or `BLUETOOTH_CONNECT` as appropriate.
 
 ## Useful Files
 
 - `app/src/main/java/com/newhaven/gate/MainActivity.kt`
+- `app/src/main/java/com/newhaven/gate/BlePermissionPolicy.java`
+- `app/src/test/java/com/newhaven/gate/BlePermissionPolicyTest.java`
 - `app/src/main/AndroidManifest.xml`
 - `app/src/main/res/layout/activity_main.xml`
 - `app/src/main/res/values/strings.xml`
@@ -22,6 +25,7 @@ Android-specific guidance for the D5-Evo BLE Pedestrian Trigger.
 ## Build
 
 ```bash
+./gradlew testDebugUnitTest --tests com.newhaven.gate.BlePermissionPolicyTest
 ./gradlew assembleDebug
 ```
 

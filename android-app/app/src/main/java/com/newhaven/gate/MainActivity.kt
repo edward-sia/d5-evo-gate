@@ -25,6 +25,7 @@ import android.view.View
 import android.widget.Button
 import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.annotation.RequiresPermission
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import java.nio.charset.StandardCharsets
@@ -74,11 +75,13 @@ class MainActivity : AppCompatActivity() {
 
     private val permissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { grants ->
-            val granted = grants.values.all { it }
-            if (granted) {
+            val deniedPermissions = missingPermissionsAfterGrant(grants)
+            if (deniedPermissions.isEmpty()) {
                 startScanAndConnect()
             } else {
-                setMessage("Bluetooth permission was denied.")
+                setConnection("Permission needed")
+                setMessage(BlePermissionPolicy.deniedPermissionMessage(Build.VERSION.SDK_INT))
+                updateButtonState()
             }
         }
 
@@ -96,21 +99,35 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
     private val gattCallback = object : BluetoothGattCallback() {
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
             when (newState) {
                 BluetoothGatt.STATE_CONNECTED -> {
                     bluetoothGatt = gatt
+                    if (!hasConnectPermission()) {
+                        runOnUiThread {
+                            handleBlePermissionMissing()
+                        }
+                        return
+                    }
+                    val deviceLabel = deviceLabel(gatt.device)
                     runOnUiThread {
                         setConnection("Discovering services")
-                        setMessage("Connected to ${gatt.device.name ?: gatt.device.address}.")
+                        setMessage("Connected to $deviceLabel.")
                         updateButtonState()
                     }
-                    gatt.discoverServices()
+                    try {
+                        gatt.discoverServices()
+                    } catch (_: SecurityException) {
+                        runOnUiThread {
+                            handleBlePermissionMissing()
+                        }
+                    }
                 }
 
                 BluetoothGatt.STATE_DISCONNECTED -> {
-                    gatt.close()
+                    closeGatt(gatt)
                     bluetoothGatt = null
                     clearResolvedCharacteristics()
                     operationQueue.clear()
@@ -134,13 +151,18 @@ class MainActivity : AppCompatActivity() {
                 return
             }
 
+            if (!hasConnectPermission()) {
+                handleBlePermissionMissing()
+                return
+            }
+
             val service = gatt.getService(SERVICE_UUID)
             if (service == null) {
                 runOnUiThread {
                     setConnection("Wrong device")
                     setMessage("Connected device does not expose the D5-EVO BLE service.")
                 }
-                gatt.disconnect()
+                disconnectGatt(gatt)
                 return
             }
 
@@ -375,19 +397,58 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun requiredPermissions(): Array<String> =
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            arrayOf(
-                Manifest.permission.BLUETOOTH_SCAN,
-                Manifest.permission.BLUETOOTH_CONNECT,
-            )
-        } else {
-            arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
-        }
+        BlePermissionPolicy.requiredRuntimePermissions(Build.VERSION.SDK_INT)
 
     private fun hasAllPermissions(): Boolean =
         requiredPermissions().all {
-            ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED
+            hasPermission(it)
         }
+
+    private fun hasPermission(permission: String): Boolean =
+        ContextCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED
+
+    private fun missingPermissions(): Array<String> =
+        requiredPermissions().filterNot(::hasPermission).toTypedArray()
+
+    private fun missingPermissionsAfterGrant(grants: Map<String, Boolean>): Array<String> =
+        requiredPermissions()
+            .filter { permission -> grants[permission] != true && !hasPermission(permission) }
+            .toTypedArray()
+
+    private fun hasScanPermission(): Boolean =
+        Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
+            hasPermission(Manifest.permission.BLUETOOTH_SCAN)
+
+    private fun hasConnectPermission(): Boolean =
+        Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
+            hasPermission(Manifest.permission.BLUETOOTH_CONNECT)
+
+    private fun requestMissingPermissions() {
+        val permissions = missingPermissions()
+        if (permissions.isEmpty()) {
+            return
+        }
+        permissionLauncher.launch(permissions)
+    }
+
+    private fun handleBlePermissionMissing() {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            runOnUiThread {
+                handleBlePermissionMissing()
+            }
+            return
+        }
+
+        scanInProgress = false
+        bluetoothScanner = null
+        bluetoothGatt = null
+        clearResolvedCharacteristics()
+        operationQueue.clear()
+        operationInFlight = false
+        setConnection("Permission needed")
+        setMessage(BlePermissionPolicy.deniedPermissionMessage(Build.VERSION.SDK_INT))
+        updateButtonState()
+    }
 
     private fun setConnection(value: String) {
         connectionState = value
@@ -403,10 +464,11 @@ class MainActivity : AppCompatActivity() {
 
     private fun updateButtonState() {
         val connected = isConnected()
+        val hasConnectPermission = hasConnectPermission()
         val canStartScan = !scanInProgress && !connected
         connectButton.isEnabled =
             if (connected) {
-                controllerStatus.lowercase(Locale.US) != "pulsing"
+                hasConnectPermission && controllerStatus.lowercase(Locale.US) != "pulsing"
             } else {
                 canStartScan
             }
@@ -422,7 +484,7 @@ class MainActivity : AppCompatActivity() {
             )
 
         refreshButton.visibility = if (connected) View.VISIBLE else View.GONE
-        refreshButton.isEnabled = connected
+        refreshButton.isEnabled = connected && hasConnectPermission
 
         val canStop = scanInProgress || connected
         disconnectButton.visibility = if (canStop) View.VISIBLE else View.GONE
@@ -443,7 +505,7 @@ class MainActivity : AppCompatActivity() {
         } else if (hasAllPermissions()) {
             startScanAndConnect()
         } else {
-            permissionLauncher.launch(requiredPermissions())
+            requestMissingPermissions()
         }
     }
 
@@ -458,6 +520,7 @@ class MainActivity : AppCompatActivity() {
                 "scanning" -> "Looking nearby"
                 "connecting" -> "Connecting"
                 "discovering services" -> "Finishing setup"
+                "permission needed" -> "Permission needed"
                 "not found" -> "Not found"
                 else -> "Pedestrian access"
             }
@@ -476,6 +539,7 @@ class MainActivity : AppCompatActivity() {
                 "scanning" -> "Searching over Bluetooth."
                 "connecting" -> "Joining your gate controller."
                 "discovering services" -> "Almost ready."
+                "permission needed" -> BlePermissionPolicy.deniedPermissionMessage(Build.VERSION.SDK_INT)
                 "not found" -> "Move closer and try again."
                 else -> "Nearby Bluetooth control for your gate."
             }
@@ -513,6 +577,7 @@ class MainActivity : AppCompatActivity() {
             "connected" -> StatusPresentation("On", R.color.statusGreen)
             "scanning" -> StatusPresentation("Scan", R.color.statusBlue)
             "connecting", "discovering services" -> StatusPresentation("Join", R.color.statusBlue)
+            "permission needed" -> StatusPresentation("Perm", R.color.statusOrange)
             "not found" -> StatusPresentation("Miss", R.color.statusOrange)
             "scan failed", "connect failed", "service discovery failed", "wrong device" ->
                 StatusPresentation("Error", R.color.statusRed)
@@ -541,13 +606,25 @@ class MainActivity : AppCompatActivity() {
 
     @SuppressLint("MissingPermission")
     private fun startScanAndConnect() {
+        if (!hasAllPermissions()) {
+            requestMissingPermissions()
+            return
+        }
+
         val adapter = bluetoothAdapter
         if (adapter == null) {
             setMessage("This phone does not expose a Bluetooth adapter.")
             return
         }
 
-        if (!adapter.isEnabled) {
+        val bluetoothEnabled = try {
+            adapter.isEnabled
+        } catch (_: SecurityException) {
+            handleBlePermissionMissing()
+            return
+        }
+
+        if (!bluetoothEnabled) {
             setMessage("Enable Bluetooth on the phone first.")
             return
         }
@@ -557,7 +634,12 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        bluetoothScanner = adapter.bluetoothLeScanner
+        bluetoothScanner = try {
+            adapter.bluetoothLeScanner
+        } catch (_: SecurityException) {
+            handleBlePermissionMissing()
+            return
+        }
         if (bluetoothScanner == null) {
             setMessage("BLE scanning is not available on this phone.")
             return
@@ -577,7 +659,12 @@ class MainActivity : AppCompatActivity() {
             .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
             .build()
 
-        bluetoothScanner?.startScan(filters, settings, scanCallback)
+        try {
+            bluetoothScanner?.startScan(filters, settings, scanCallback)
+        } catch (_: SecurityException) {
+            handleBlePermissionMissing()
+            return
+        }
         scanInProgress = true
         setConnection("Scanning")
         setMessage("Looking for D5-EVO-Gate over BLE.")
@@ -598,29 +685,45 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        bluetoothScanner?.stopScan(scanCallback)
+        if (hasScanPermission()) {
+            try {
+                bluetoothScanner?.stopScan(scanCallback)
+            } catch (_: SecurityException) {
+                // Permission can be revoked while a scan is active; local state still needs cleanup.
+            }
+        }
+        bluetoothScanner = null
         scanInProgress = false
         updateButtonState()
     }
 
     @SuppressLint("MissingPermission")
     private fun connectToDevice(device: BluetoothDevice) {
+        if (!hasConnectPermission()) {
+            handleBlePermissionMissing()
+            requestMissingPermissions()
+            return
+        }
+
         setConnection("Connecting")
-        setMessage("Connecting to ${device.name ?: device.address}.")
-        bluetoothGatt =
+        setMessage("Connecting to ${deviceLabel(device)}.")
+        bluetoothGatt = try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                 device.connectGatt(this, false, gattCallback, BluetoothDevice.TRANSPORT_LE)
             } else {
                 device.connectGatt(this, false, gattCallback)
             }
+        } catch (_: SecurityException) {
+            handleBlePermissionMissing()
+            null
+        }
         updateButtonState()
     }
 
     @SuppressLint("MissingPermission")
     private fun disconnectGatt() {
         stopScan()
-        bluetoothGatt?.disconnect()
-        bluetoothGatt?.close()
+        disconnectGatt(bluetoothGatt)
         bluetoothGatt = null
         clearResolvedCharacteristics()
         operationQueue.clear()
@@ -628,7 +731,41 @@ class MainActivity : AppCompatActivity() {
         updateButtonState()
     }
 
+    @SuppressLint("MissingPermission")
+    private fun disconnectGatt(gatt: BluetoothGatt?) {
+        if (gatt == null || !hasConnectPermission()) {
+            return
+        }
+
+        try {
+            gatt.disconnect()
+        } catch (_: SecurityException) {
+            handleBlePermissionMissing()
+            return
+        }
+
+        closeGatt(gatt)
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun closeGatt(gatt: BluetoothGatt?) {
+        if (gatt == null || !hasConnectPermission()) {
+            return
+        }
+
+        try {
+            gatt.close()
+        } catch (_: SecurityException) {
+            handleBlePermissionMissing()
+        }
+    }
+
     private fun queueStatusRefresh() {
+        if (!hasConnectPermission()) {
+            handleBlePermissionMissing()
+            return
+        }
+
         authStatusCharacteristic?.let { operationQueue.add(GattOperation.ReadCharacteristic(it)) }
         authChallengeCharacteristic?.let { operationQueue.add(GattOperation.ReadCharacteristic(it)) }
         controllerStatusCharacteristic?.let {
@@ -639,6 +776,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun enqueueCommand(command: String) {
+        if (!hasConnectPermission()) {
+            handleBlePermissionMissing()
+            return
+        }
+
         if (commandCharacteristic == null) {
             setMessage("Connect to the gate controller first.")
             return
@@ -650,6 +792,13 @@ class MainActivity : AppCompatActivity() {
     @SuppressLint("MissingPermission")
     private fun runNextOperation() {
         if (operationInFlight) {
+            return
+        }
+
+        if (!hasConnectPermission()) {
+            clearPendingAuthRequest()
+            operationQueue.clear()
+            handleBlePermissionMissing()
             return
         }
 
@@ -666,7 +815,15 @@ class MainActivity : AppCompatActivity() {
                 }
                 characteristic.value = operation.command.toByteArray(StandardCharsets.UTF_8)
                 operationInFlight = true
-                if (!gatt.writeCharacteristic(characteristic)) {
+                val started = try {
+                    gatt.writeCharacteristic(characteristic)
+                } catch (_: SecurityException) {
+                    operationInFlight = false
+                    clearPendingAuthRequest()
+                    handleBlePermissionMissing()
+                    return
+                }
+                if (!started) {
                     operationInFlight = false
                     clearPendingAuthRequest()
                     setMessage("Failed to start command write.")
@@ -676,7 +833,15 @@ class MainActivity : AppCompatActivity() {
 
             is GattOperation.ReadCharacteristic -> {
                 operationInFlight = true
-                if (!gatt.readCharacteristic(operation.characteristic)) {
+                val started = try {
+                    gatt.readCharacteristic(operation.characteristic)
+                } catch (_: SecurityException) {
+                    operationInFlight = false
+                    clearPendingAuthRequest()
+                    handleBlePermissionMissing()
+                    return
+                }
+                if (!started) {
                     operationInFlight = false
                     clearPendingAuthRequest()
                     setMessage("Failed to start status read.")
@@ -705,6 +870,18 @@ class MainActivity : AppCompatActivity() {
         updatePrimaryCard()
         updateButtonState()
     }
+
+    @SuppressLint("MissingPermission")
+    private fun deviceLabel(device: BluetoothDevice): String =
+        if (hasConnectPermission()) {
+            try {
+                device.name ?: device.address
+            } catch (_: SecurityException) {
+                "gate controller"
+            }
+        } else {
+            "gate controller"
+        }
 
     companion object {
         private const val SCAN_TIMEOUT_MS = 10_000L

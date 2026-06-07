@@ -220,20 +220,26 @@ flowchart LR
 
 Both mobile apps follow the same control contract:
 
-1. Scan by service UUID.
-2. Connect to the nearby controller.
-3. Discover the command, status, auth challenge, info, and auth status characteristics.
-4. Refresh status in a serialized BLE operation queue.
-5. If auth is required, sign the challenge locally.
-6. Write `PED`.
-7. Disconnect when the app leaves the foreground.
+1. Request the platform BLE permissions.
+2. Scan by service UUID.
+3. Connect to the nearby controller.
+4. Discover the command, status, auth challenge, info, and auth status characteristics.
+5. Refresh status in a serialized BLE operation queue.
+6. If auth is required, sign the challenge locally.
+7. Write `PED`.
+8. Disconnect when the app leaves the foreground.
+
+Android 12 and newer require `BLUETOOTH_SCAN` and `BLUETOOTH_CONNECT` for this
+flow. Android 11 and older require `ACCESS_FINE_LOCATION` for BLE scanning. The
+Android app guards direct BLE API calls and clears local BLE state if permission
+is denied or revoked while the app is active.
 
 ## Build And Verification Matrix
 
 | Area changed | Minimum command | Extra verification |
 | --- | --- | --- |
 | Firmware | `pio run -e esp32-usb-c-38pin` | Bench relay click test; supervised gate test before live use. |
-| Android | `cd android-app && ./gradlew assembleDebug` | Real Android BLE scan/connect/auth/trigger test. |
+| Android | `cd android-app && ./gradlew testDebugUnitTest --tests com.newhaven.gate.BlePermissionPolicyTest && ./gradlew assembleDebug` | Real Android BLE scan/connect/auth/trigger test. |
 | iOS | `xcodebuild -project ios-app/D5EvoBleGate.xcodeproj -scheme D5EvoBleGate -sdk iphonesimulator -configuration Debug build` | Real iPhone BLE scan/connect/auth/trigger test. |
 | Docs only | `rg` consistency checks | Confirm diagrams match code paths. |
 

@@ -25,6 +25,7 @@ clients only.
 - Firmware local template: `include/app_config_local.example.h`
 - PlatformIO profile: `platformio.ini`
 - Android BLE app: `android-app/app/src/main/java/com/newhaven/gate/MainActivity.kt`
+- Android permission policy: `android-app/app/src/main/java/com/newhaven/gate/BlePermissionPolicy.java`
 - Android local auth template: `android-app/gate.local.properties.example`
 - iOS BLE manager: `ios-app/D5EvoBleGate/GateBLEManager.swift`
 - iOS SwiftUI view: `ios-app/D5EvoBleGate/ContentView.swift`
@@ -35,12 +36,15 @@ clients only.
 
 ```bash
 pio run -e esp32-usb-c-38pin
+cd android-app && ./gradlew testDebugUnitTest --tests com.newhaven.gate.BlePermissionPolicyTest
 cd android-app && ./gradlew assembleDebug
 xcodebuild -project ios-app/D5EvoBleGate.xcodeproj -scheme D5EvoBleGate -sdk iphonesimulator -configuration Debug build
 ```
 
 Use the command that matches the subsystem changed. For BLE and relay behavior,
 software builds are not enough; call out when physical bench testing was not run.
+For Android permission changes, run the focused `BlePermissionPolicyTest` plus
+the debug build before phone testing.
 
 ## Documentation Rule
 
