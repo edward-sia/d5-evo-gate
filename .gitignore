@@ -14,3 +14,6 @@ ios-app/D5EvoBleGate/Config/LocalSecrets.xcconfig
 ios-app/**/xcuserdata/
 ios-app/**/*.xcuserstate
 .DS_Store
+
+# Brainstorm mockups
+.superpowers/
