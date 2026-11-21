@@ -1,588 +1,432 @@
 # Phone Admin: Firmware Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or superpowers:executing-plans when implementation is explicitly authorized. Steps use checkbox syntax for tracking. This document does not authorize execution.
 
-**Goal:** The ESP32 keeps a list of joined phones, lets one admin phone add and remove them with one-time codes, and still accepts the shared passphrase until the admin turns it off.
+Status: conditional plan for owner review; no implementation or bench testing performed
+Created: 2026-11-21
+Revised: 2026-11-22
 
-**Architecture:** The auth and admin logic moves out of `src/main.cpp` into a small library, `lib/gate_core`, that has no Arduino or BLE dependency. That library is unit tested on the laptop. `main.cpp` keeps BLE and the relay and calls the library. A Python reference implementation defines every key derivation and produces the test vectors that the firmware and, later, both apps must match.
+**Goal:** Add individually revocable phones and one local admin without exposing
+keys, accepting altered commands, losing access policy on storage errors, or
+changing the intended pedestrian pulse.
 
-**Tech Stack:** PlatformIO, Arduino-ESP32 2.0.17 (mbedTLS 2.28, `Preferences` for NVS), Unity for native tests, Python 3.12 standard library, `bleak` for the bench client.
+**Architecture:** Keep BLE and hardware integration in src/main.cpp; isolate
+crypto, storage, protocol and framing in lib/gate_core. BLE callbacks enqueue
+bounded work; one owner serializes authorization and persistence. New clients
+use mutually authenticated sessions and authenticated requests/replies. Legacy
+clients retain a deliberately restricted migration path.
 
-**Spec:** `docs/superpowers/specs/2026-11-21-phone-admin-design.md`
+**Tech Stack:** PlatformIO/Arduino ESP32, mbedTLS, Preferences/NVS, C++ with Unity
+native tests, TypeScript with Node crypto and node:test for independent vectors,
+existing Kotlin/Swift clients for early real-device proof. Pin actual framework
+and provider versions in Task 0; the current espressif32 dependency is unpinned.
 
-**This is plan 1 of 3.** The iOS plan and the Android plan are written after this firmware passes its bench test. They consume `docs/test-vectors.json` and the command table in the spec.
+**Spec:** [Phone admin design](../specs/2026-11-21-phone-admin-design.md), revision
+2026-11-22, requirements R1-R7 and proposed decisions D1-D9.
+
+This replaces the earlier seven-task plan and its 59-test promise. The previous
+crypto literals describe an obsolete proposal except the unchanged legacy
+algorithm. Do not implement old message rules from PR history.
+
+## Authorization and sequence
+
+Current authorization covers only this spec/plan revision in PR #1. All boxes
+remain unchecked. The owner first reviews D1-D9. Task 0 then freezes the byte
+contract and execution details in these same canonical documents. Code requires
+a separate explicit implementation instruction; neither PR merge nor design
+approval grants it.
+
+This remains the firmware plan, with a narrow early mobile compatibility proof.
+Detailed iOS and Android product plans follow that proof, before full admin UI.
+The mobile proof touches only diagnostic drivers and their existing BLE entry
+points, not the final onboarding screens. Its future file scope is named below.
 
 ## Global Constraints
 
-- Relay code is not changed: `GPIO23`, active-high default, 500 ms pulse, cooldown, momentary only.
-- Existing UUIDs do not change. The one new characteristic is `4b8c2ec4-3f66-4f00-8a43-95f79d2c0cc7`, read only.
-- `AUTHRESP <hex>`, `PED` and `TRIGGER` keep their current behaviour and the legacy algorithm (label `D5-EVO-AUTH-V1|`, 2048 rounds) is byte-for-byte unchanged.
-- Every keyed hash is HMAC-SHA256. Hashed messages are ASCII. `C`, `Np`, `Ni` and ids appear in messages as uppercase hex text.
-- No key or secret is ever written to a BLE characteristic or printed to serial.
-- All new command arguments are hex or digits, because commands are uppercased before parsing.
-- Limit of 16 phones including waiting codes. Names are 1 to 24 bytes.
-- Waiting codes live in RAM only. Phones, the admin key and the shared-passphrase switch live in NVS.
-- Real secrets stay in ignored files. Do not print or commit `include/app_config_local.h`.
-- When behaviour changes, update `README.md`, `AGENTS.md`, `CLAUDE.md` and `docs/architecture.md` in the same task.
-- If `pio` is not on `PATH`, use `~/.platformio/penv/bin/pio`.
-- Native tests link against CommonCrypto, so they run on macOS only.
+- Preserve GPIO23, active-high default, PED/COM only, 500 ms momentary pulse and
+  existing 5 second cooldown policy. No position sensing/FRX/Status/board changes.
+- Keep the six existing UUIDs; reply UUID is
+  4b8c2ec4-3f66-4f00-8a43-95f79d2c0cc7, read only.
+- Preserve legacy AUTHRESP, D5-EVO-AUTH-V1| and 2048 rounds byte for byte. Legacy
+  sessions never grant admin access. Raw PED/TRIGGER cannot use new-session auth.
+- Every new mutation/pulse requires a verified request envelope; every trusted
+  response requires a verified reply bound to the exact request.
+- New protocol version is 2; proposed setup KDF suite 1 uses 10,000 rounds.
+  Do not tune a released KDF silently. Setup/gate ID are each 16 random bytes.
+- Keys/tags are 32 bytes; invitation secret and random nonces 16 bytes; phone ID
+  4 bytes. Names valid UTF-8, 1-24 bytes, no control characters.
+- Capacity is 16 joined + waiting, excluding admin. TTL choices are exactly
+  600, 86400, 604800 seconds. Use 64-bit monotonic uptime.
+- Framing must support 20-byte write payloads, 512-byte reassembled messages,
+  one outstanding request and a 5 second assembly deadline.
+- Proposed session duration 30 seconds, unauthenticated connection deadline
+  15 seconds, hard connection cap 60 seconds, auth backoff 15 seconds across
+  reconnects within one boot; preserve the existing 60 second idle safeguard.
+- Installed storage/crypto failures lock electronic commands. No implicit
+  no-auth, legacy reenablement, NVS erase or rollback to stale permissions.
+- No automatic retry of a physical trigger after an uncertain result.
+- No secrets in BLE values, logs, tracked files or app builds. Do not read or
+  print real local secret files. Use fixed synthetic inputs for test evidence.
+- Runtime docs change alongside future runtime implementation, not in this PR.
+- New reference tooling uses TypeScript. Keep C++/Kotlin/Swift for existing
+  subsystems. Native CommonCrypto backend may remain macOS-only if documented.
 
-## Review Focus
+## Review Focus and traceability
 
-1. Reboot or power cut after a phone joins: the phone must still unlock after restart. Pinned in Task 3, `test_phones_survive_reload`.
-2. Malformed commands from any nearby phone (odd-length hex, missing arguments, 500 bytes of junk, lowercase): the gate must answer `ERR BAD-ARGS` or `bad-command`, change nothing and not crash. Pinned in Task 4, `test_malformed_commands_change_nothing`.
-3. An old app against new firmware once the admin has turned the shared passphrase off: `AUTHRESP` with the correct passphrase must be denied and `PED` must stay locked. Pinned in Task 4, `test_legacy_off_denies_correct_passphrase`.
-4. The list is full: the 17th `INVITE` must fail with `ERR FULL`, and removing a phone must free a place. Pinned in Task 5, `test_invite_fails_when_full_then_succeeds_after_revoke`.
-5. Uptime beyond 49.7 days (past 32-bit milliseconds): a 7-day code created then must expire 7 days later, not at once and not never. Pinned in Task 3, `test_invite_expiry_past_32bit_uptime`.
-
----
-
-## File Structure
-
-| File | Responsibility |
-| --- | --- |
-| `tools/gate_crypto.py` | Reference implementation of every derivation. The source of truth. |
-| `tools/gen_vectors.py` | Writes `docs/test-vectors.json` from fixed inputs. |
-| `tools/test_gate_crypto.py` | Fails if the JSON file and the reference disagree. |
-| `tools/gate_cli.py` | Bench client. Acts as admin phone or tenant phone from the laptop. |
-| `lib/gate_core/crypto_primitives.h` | HMAC-SHA256, SHA-256, PBKDF2 declarations. |
-| `lib/gate_core/crypto_primitives_mbedtls.cpp` | ESP32 backend. |
-| `lib/gate_core/crypto_primitives_commoncrypto.cpp` | macOS test backend. |
-| `lib/gate_core/gate_crypto.h/.cpp` | Derivations and proofs built on the primitives. Hex helpers. |
-| `lib/gate_core/gate_store.h/.cpp` | Phones, waiting codes, admin key, shared-passphrase switch. |
-| `lib/gate_core/gate_protocol.h/.cpp` | Session state and command handling. |
-| `src/nvs_backend.h/.cpp` | `StoreBackend` on `Preferences`. |
-| `src/main.cpp` | BLE, relay, wiring. Auth logic removed from here. |
-| `test/support/test_support.h` | In-memory backend and counting random source for tests. |
-| `test/test_crypto/`, `test/test_store/`, `test/test_protocol/` | Unity tests, native env. |
-
-Shared fixed inputs for all vectors:
-
-```text
-setupCode = "correct horse battery staple"     legacyPin = "bench-pass"
-C  = 000102030405060708090A0B0C0D0E0F          id = A1B2C3D4
-Np = 101112131415161718191A1B1C1D1E1F          Ni = 202122232425262728292A2B2C2D2E2F
-```
-
----
-
-### Task 1: Python reference and test vectors
-
-**Files:**
-- Create: `tools/gate_crypto.py`, `tools/gen_vectors.py`, `tools/test_gate_crypto.py`, `docs/test-vectors.json`
-
-**Interfaces:**
-- Produces: `docs/test-vectors.json` with keys `inputs`, `rounds` and `expected`. Functions in `tools/gate_crypto.py`: `setup_key`, `fingerprint`, `claim_proof`, `admin_key`, `invite_secret`, `join_proof`, `phone_key`, `auth_proof`, `legacy_response`. All return `bytes`.
-
-- [ ] **Step 1: Write the failing test** in `tools/test_gate_crypto.py`
-
-```python
-import json, pathlib, unittest
-import gate_crypto as g
-import gen_vectors
-
-VECTORS = pathlib.Path(__file__).parent.parent / "docs" / "test-vectors.json"
-
-class VectorTest(unittest.TestCase):
-    def test_file_matches_reference(self):
-        self.assertEqual(json.loads(VECTORS.read_text()), gen_vectors.build())
-
-    def test_pinned_values(self):
-        e = gen_vectors.build()["expected"]
-        self.assertEqual(e["setupKey"], "E6E9982D77ABFE9B31A9A2E07C418630EBCFE6DCC66C19E36560E0B893CC86A3")
-        self.assertEqual(e["legacyResponse"], "F9A8B42C66D1B8C7C5F6B1076DF6227307825BF3E49BC19172A0E971CF057769")
-        self.assertEqual(e["inviteSecret"], "0B752903D8BD576C7CA04E8057913644")
-```
-
-- [ ] **Step 2: Run it and see it fail**
-
-Run: `cd tools && python3 -m unittest test_gate_crypto -v`
-Expected: FAIL with `ModuleNotFoundError: No module named 'gate_crypto'`
-
-- [ ] **Step 3: Write `tools/gate_crypto.py`.** This body is the definition of the byte format, so copy it exactly.
-
-```python
-import hashlib, hmac
-
-ROUNDS = 10000
-SALT = b"D5-EVO-SETUP-V1"
-
-def _h(key: bytes, msg: str) -> bytes:
-    return hmac.new(key, msg.encode("ascii"), hashlib.sha256).digest()
-
-def setup_key(code: str) -> bytes:
-    return hashlib.pbkdf2_hmac("sha256", code.encode("utf-8"), SALT, ROUNDS, 32)
-
-def fingerprint(setup: bytes) -> bytes:        return _h(setup, "SETUPFP")[:8]
-def claim_proof(setup, c, np) -> bytes:        return _h(setup, f"CLAIM|{c}|{np}")
-def admin_key(setup, c, np) -> bytes:          return _h(setup, f"ADMINKEY|{c}|{np}")
-def invite_secret(admin, id_, ni) -> bytes:    return _h(admin, f"INVITE|{id_}|{ni}")[:16]
-def join_proof(secret, c, np) -> bytes:        return _h(secret, f"JOIN|{c}|{np}")
-def phone_key(secret, c, np) -> bytes:         return _h(secret, f"PHONEKEY|{c}|{np}")
-def auth_proof(key, c) -> bytes:               return _h(key, f"AUTH|{c}")
-
-def legacy_response(pin: str, c: str) -> bytes:
-    p, cb = pin.encode("utf-8"), c.encode("ascii")
-    d = hashlib.sha256(b"D5-EVO-AUTH-V1|" + p + cb).digest()
-    for _ in range(2047):
-        d = hashlib.sha256(d + p + cb).digest()
-    return d
-```
-
-`c`, `np`, `ni` and `id_` are uppercase hex strings.
-
-- [ ] **Step 4: Write `tools/gen_vectors.py`** with `build() -> dict` and a `__main__` that writes the JSON file with `indent=2`. `build()` uses the shared fixed inputs above and returns `{"inputs": {...}, "rounds": 10000, "expected": {...}}`. `expected` has these keys, all uppercase hex: `setupKey`, `setupFingerprint`, `claimProof`, `adminKey`, `inviteSecret`, `joinProof`, `phoneKey`, `phoneAuthProof`, `adminAuthProof`, `legacyResponse`. `phoneAuthProof` is `auth_proof(phoneKey, C)`, `adminAuthProof` is `auth_proof(adminKey, C)`.
-
-- [ ] **Step 5: Generate and test**
-
-Run: `cd tools && python3 gen_vectors.py && python3 -m unittest test_gate_crypto -v`
-Expected: `OK`, 2 tests.
-
-- [ ] **Step 6: Commit** `tools/gate_crypto.py tools/gen_vectors.py tools/test_gate_crypto.py docs/test-vectors.json` with message `feat: add reference key derivations and test vectors`.
-
----
-
-### Task 2: `gate_crypto` in C++ with a native test env
-
-**Files:**
-- Create: `lib/gate_core/crypto_primitives.h`, `lib/gate_core/crypto_primitives_mbedtls.cpp`, `lib/gate_core/crypto_primitives_commoncrypto.cpp`, `lib/gate_core/gate_crypto.h`, `lib/gate_core/gate_crypto.cpp`, `test/test_crypto/test_main.cpp`
-- Modify: `platformio.ini`
-
-**Interfaces:**
-- Consumes: expected values from `docs/test-vectors.json`.
-- Produces, all in `namespace gate`:
-
-```cpp
-// crypto_primitives.h
-bool sha256(const uint8_t* data, size_t len, uint8_t out[32]);
-bool hmacSha256(const uint8_t* key, size_t keyLen, const uint8_t* msg, size_t msgLen, uint8_t out[32]);
-bool pbkdf2Sha256(const uint8_t* password, size_t passwordLen, const uint8_t* salt, size_t saltLen,
-                  uint32_t rounds, uint8_t out[32]);
-
-// gate_crypto.h
-using Key = std::array<uint8_t, 32>;
-using InviteSecret = std::array<uint8_t, 16>;
-using SetupFingerprint = std::array<uint8_t, 8>;
-constexpr uint32_t kSetupRounds = 10000;
-
-std::string hexEncode(const uint8_t* bytes, size_t len);              // uppercase
-bool hexDecode(const std::string& hex, uint8_t* out, size_t outLen);  // false unless exactly outLen*2 hex chars
-bool constantTimeEquals(const uint8_t* a, const uint8_t* b, size_t len);
-
-bool deriveSetupKey(const std::string& setupCode, Key& out);
-bool deriveSetupFingerprint(const Key& setupKey, SetupFingerprint& out);
-bool claimProof(const Key& setupKey, const std::string& cHex, const std::string& npHex, Key& out);
-bool deriveAdminKey(const Key& setupKey, const std::string& cHex, const std::string& npHex, Key& out);
-bool deriveInviteSecret(const Key& adminKey, const std::string& idHex, const std::string& niHex, InviteSecret& out);
-bool joinProof(const InviteSecret& secret, const std::string& cHex, const std::string& npHex, Key& out);
-bool derivePhoneKey(const InviteSecret& secret, const std::string& cHex, const std::string& npHex, Key& out);
-bool authProof(const Key& key, const std::string& cHex, Key& out);
-std::string legacyAuthResponseHex(const std::string& pin, const std::string& cHex);  // "" on failure
-```
-
-- [ ] **Step 1: Add the native env to `platformio.ini`**
-
-```ini
-[env:esp32-usb-c-38pin]
-; existing lines stay
-test_ignore = *
-
-[env:native]
-platform = native
-test_framework = unity
-build_flags = -std=c++17 -I test/support
-```
-
-- [ ] **Step 2: Write the failing tests** in `test/test_crypto/test_main.cpp`. One Unity test per row below. Each calls the function with the shared fixed inputs and compares `hexEncode` of the result with the literal.
-
-| Test | Call | Expected hex |
+| Failure class | Required result | Owning tasks/tests |
 | --- | --- | --- |
-| `test_setup_key` | `deriveSetupKey("correct horse battery staple")` | `E6E9982D77ABFE9B31A9A2E07C418630EBCFE6DCC66C19E36560E0B893CC86A3` |
-| `test_fingerprint` | `deriveSetupFingerprint(setupKey)` | `61BAD2487040A2CE` |
-| `test_claim_proof` | `claimProof(setupKey, C, Np)` | `1ED62E1175D8603BA5DCD52D6584EDCA2765F3F4D1E5734213B98C1F938EF054` |
-| `test_admin_key` | `deriveAdminKey(setupKey, C, Np)` | `DAD34BE6276E9705CEBBD86F21A2E83BD9AD14459907070B2D3E41F207D76126` |
-| `test_invite_secret` | `deriveInviteSecret(adminKey, "A1B2C3D4", Ni)` | `0B752903D8BD576C7CA04E8057913644` |
-| `test_join_proof` | `joinProof(inviteSecret, C, Np)` | `8A8DB9C9C378BA1D9BDFB5FD05715997F4829F029F5ECFE5DB906C4B60252834` |
-| `test_phone_key` | `derivePhoneKey(inviteSecret, C, Np)` | `E678A60014BDF132203C3FCE81C6B25B5EFE7BB9F97A37FA98C815C86C6A7517` |
-| `test_phone_auth_proof` | `authProof(phoneKey, C)` | `3D2E910F0124CF136C2B5F779704A2604EAFEC3DB536302FFBFC9832B08CCF7C` |
-| `test_admin_auth_proof` | `authProof(adminKey, C)` | `1935CEE147190DC85859820508B4ECEE482C09EB4C1EA9494159F1C9056C0AD8` |
-| `test_legacy_response` | `legacyAuthResponseHex("bench-pass", C)` | `F9A8B42C66D1B8C7C5F6B1076DF6227307825BF3E49BC19172A0E971CF057769` |
+| Proxy changes an authenticated command/reply or replays it elsewhere | Reject without mutation/pulse; retain client credentials on untrusted errors | Tasks 1/3/6: tamper_binding, role_and_gate_binding, stale_reply, no_credential_deletion |
+| Full capacity, reclaim and interrupted enrollment | Convert a reserved slot; cancel old invites on reclaim; reconcile saved candidates | Tasks 2/4/6: join_at_capacity, reclaim_cancels_invites, lost_claim_receipt, lost_join_receipt |
+| NVS error/power cut around revoke or legacy-off | No acknowledged policy rollback or silent fallback; indeterminate write enters recovery | Tasks 2/5/7: store_failure_matrix, revoke_power_cut, legacy_off_power_cut |
+| Minimum MTU, hostile fragments and connection monopolization | Complete bounded messages only; expire old connections/work; no stale OK | Tasks 3/5/6: framing_matrix, connection_deadlines, stale_connection_work |
+| Flash/crypto workload around a relay pulse | Measured timing bound, no duplicate pulse or unexpected closure on recovery | Tasks 5/7: pulse_workload_matrix, reset_brownout, uncertain_ped |
 
-Also `test_hex_decode_rejects_bad_input`: `hexDecode` returns false for `"0G"`, for `"ABC"` and for a string one byte too long or too short, and true for `"a1B2"` into 2 bytes giving `{0xA1, 0xB2}`.
+R1 maps to Tasks 0-1/3; R2 to 3-4/6; R3 to 1-2/4/6;
+R4 to 2/5/7; R5 to 0/3/5/6; R6 to 5/7; R7 to 6-8.
+A test count is not a substitute for this coverage.
 
-- [ ] **Step 3: Run and see it fail**
+## Planned file structure
 
-Run: `pio test -e native -f test_crypto`
-Expected: build error, `gate_crypto.h` not found.
+These are future implementation paths, not files created by this docs-only PR.
 
-- [ ] **Step 4: Implement the primitives.** `crypto_primitives_mbedtls.cpp` is wrapped in `#ifdef ARDUINO` and uses `mbedtls_md_hmac`, `mbedtls_sha256_ret` and `mbedtls_pkcs5_pbkdf2_hmac`. `crypto_primitives_commoncrypto.cpp` is wrapped in `#if defined(__APPLE__) && !defined(ARDUINO)` and uses `CCHmac`, `CC_SHA256` and `CCKeyDerivationPBKDF`.
-
-- [ ] **Step 5: Implement `gate_crypto.cpp`.** Messages are built exactly as in `tools/gate_crypto.py`. PBKDF2 salt is the 15 ASCII bytes `D5-EVO-SETUP-V1`. `legacyAuthResponseHex` is the algorithm now in `src/main.cpp:95-119`, moved here unchanged.
-
-- [ ] **Step 6: Run and see it pass**
-
-Run: `pio test -e native -f test_crypto`
-Expected: 11 tests, 0 failures.
-
-- [ ] **Step 7: Check the ESP32 build still compiles**
-
-Run: `pio run -e esp32-usb-c-38pin`
-Expected: `SUCCESS`.
-
-- [ ] **Step 8: Commit** with message `feat: add gate key derivations with native tests`.
-
----
-
-### Task 3: `GateStore`
-
-**Files:**
-- Create: `lib/gate_core/gate_store.h`, `lib/gate_core/gate_store.cpp`, `test/support/test_support.h`, `test/test_store/test_main.cpp`
-
-**Interfaces:**
-- Consumes: `Key`, `InviteSecret`, `SetupFingerprint` from Task 2.
-- Produces, in `namespace gate`:
-
-```cpp
-using PhoneId = std::array<uint8_t, 4>;
-struct Phone  { PhoneId id; std::string name; Key key; };
-struct Invite { PhoneId id; std::string name; InviteSecret secret; std::array<uint8_t, 16> ni; uint64_t expiresAtMs; };
-
-class StoreBackend {
- public:
-  virtual ~StoreBackend() = default;
-  virtual bool load(const char* key, std::vector<uint8_t>& out) = 0;   // false when absent
-  virtual bool save(const char* key, const std::vector<uint8_t>& data) = 0;
-};
-
-class GateStore {
- public:
-  static constexpr size_t kMaxEntries = 16;
-  static constexpr size_t kMaxNameBytes = 24;
-  explicit GateStore(StoreBackend& backend);
-  void begin(const SetupFingerprint* fingerprint);   // nullptr when no setup code is configured
-  bool hasAdminKey() const;
-  const Key& adminKey() const;
-  bool setAdminKey(const Key& key, const SetupFingerprint& fingerprint);
-  bool legacyEnabled() const;                        // default true
-  bool setLegacyEnabled(bool enabled);
-  const std::vector<Phone>& phones() const;
-  const Phone* findPhone(const PhoneId& id) const;
-  bool addPhone(const Phone& phone);                 // false when full or the id exists
-  bool removePhone(const PhoneId& id);
-  const std::vector<Invite>& invites(uint64_t nowMs);          // drops expired codes first
-  const Invite* findInvite(const PhoneId& id, uint64_t nowMs);
-  bool addInvite(const Invite& invite, uint64_t nowMs);        // false when phones + invites == 16
-  bool removeInvite(const PhoneId& id);
-};
-```
-
-`test/support/test_support.h` produces `class FakeBackend : public gate::StoreBackend` backed by a `std::map<std::string, std::vector<uint8_t>>` that is public as `data`, plus `void countingRandom(uint8_t* out, size_t len)` which writes 0x00, 0x01, 0x02… continuing across calls, and `void resetCountingRandom()`.
-
-Backend keys: `"admin"` (8 fingerprint bytes then 32 key bytes), `"legacy"` (1 byte), `"phones"` (version byte `1`, count byte, then per phone: 4 id bytes, 1 name-length byte, the name, 32 key bytes).
-
-- [ ] **Step 1: Write the failing tests** in `test/test_store/test_main.cpp`
-
-| Test | Asserts |
+| Path | Responsibility |
 | --- | --- |
-| `test_empty_store_defaults` | After `begin(&fp)`: `hasAdminKey()` false, `legacyEnabled()` true, `phones()` empty. |
-| `test_phones_survive_reload` | Add two phones. Build a second `GateStore` on the same `FakeBackend` and call `begin`. `findPhone` returns both with the same name and key. |
-| `test_admin_key_survives_reload_with_same_fingerprint` | `setAdminKey(k, fp)`, reload with `begin(&fp)`: `adminKey() == k`. |
-| `test_admin_key_cleared_when_fingerprint_changes` | Reload with a different fingerprint, and separately with `nullptr`: `hasAdminKey()` false both times. Phones are still present. |
-| `test_legacy_switch_survives_reload` | `setLegacyEnabled(false)`, reload: `legacyEnabled()` false. |
-| `test_invites_do_not_survive_reload` | `addInvite`, reload: `invites(0)` empty. |
-| `test_invite_expires` | Invite with `expiresAtMs = 1000`: found at `nowMs = 999`, not found at `1000`. |
-| `test_invite_expiry_past_32bit_uptime` | `now = 5'000'000'000`. Invite with `expiresAtMs = now + 604'800'000`: found at `now + 604'799'999`, not found at `now + 604'800'000`. |
-| `test_capacity_counts_phones_and_invites` | 10 phones and 6 invites succeed. An 11th phone and a 7th invite both return false. After `removeInvite`, `addPhone` succeeds. |
-| `test_duplicate_id_rejected` | `addPhone` with an id already used by a phone returns false. `addInvite` with an id used by a phone or an invite returns false. |
-| `test_remove_phone_persists` | `removePhone`, reload: `findPhone` returns `nullptr`. |
-| `test_corrupt_phone_blob_loads_empty` | Set `backend.data["phones"]` to `{9, 200, 1, 2}` and to an empty vector. `begin` does not crash and `phones()` is empty. |
-| `test_name_too_long_rejected` | `addPhone` and `addInvite` with a 25-byte name or an empty name return false. |
+| tools/gate_crypto.ts, tools/gate_crypto.test.ts | Independent Node crypto reference and frozen-vector assertions |
+| tools/gen_vectors.ts, tools/gate_protocol.test.ts | Deterministic fixtures and message/encoding tests |
+| docs/test-vectors.json | Versioned inputs, canonical bytes and expected outputs |
+| lib/gate_core/crypto_primitives.h, crypto_primitives_mbedtls.cpp, crypto_primitives_commoncrypto.cpp | Crypto provider interfaces and backends |
+| lib/gate_core/gate_crypto.h/.cpp | Reviewed derivations, proofs and comparison |
+| lib/gate_core/gate_store.h/.cpp | Snapshot validation, atomic enrollment, persistent policy |
+| lib/gate_core/gate_protocol.h/.cpp | Explicit roles, sessions, requests and reply correlation |
+| lib/gate_core/gate_transport.h/.cpp | Bounded framing/reassembly |
+| src/nvs_backend.h/.cpp | Preferences adapter and precise failure classification |
+| src/main.cpp, include/app_config.h, include/app_config_local.example.h | Queue integration, relay arbitration, provisioning profiles/config |
+| platformio.ini | Pinned target and native test environment |
+| test/support/test_support.h | Fault-injecting backend, fake clock and deterministic random source |
+| test/test_crypto/test_main.cpp, test/test_store/test_main.cpp | Crypto/store tests |
+| test/test_protocol/test_main.cpp, test/test_transport/test_main.cpp, test/test_scheduler/test_main.cpp | Protocol/transport/scheduling tests |
+| android-app/app/src/main/java/com/newhaven/gate/ProtocolProbe.kt | Debug-only Android diagnostic driver, not production admin UI |
+| ios-app/D5EvoBleGate/ProtocolProbe.swift | Debug-only iOS diagnostic driver, not production admin UI |
+| docs/architecture.md | Implemented protocol and dated verification evidence when work is authorized |
 
-- [ ] **Step 2: Run and see it fail**
+The original laptop Python reference/CLI is replaced by TypeScript reference
+tests plus native phone probes. This follows the repository language preference
+and makes real mobile interoperability a prerequisite. A standalone laptop BLE
+client is optional follow-up tooling, not a release dependency.
 
-Run: `pio test -e native -f test_store`
-Expected: build error, `gate_store.h` not found.
+## Task 0: Ratify defaults and freeze the protocol contract
 
-- [ ] **Step 3: Implement `test_support.h`, `gate_store.h` and `gate_store.cpp`.** Every change to phones, the admin key or the switch is saved before the method returns true. If `save` fails, the method returns false and the in-memory state is left as it was.
+**Files:** this plan and the linked spec only.
+**Consumes:** owner decisions D1-D9, existing firmware/app BLE behavior.
+**Produces:** a reviewed byte contract embedded in spec R1/R2/R5 and exact
+interfaces below refined as needed; no product code.
 
-- [ ] **Step 4: Run and see it pass**
+- [ ] Record the owner's decision for each D1-D9, without retroactively labeling
+  proposals approved. Retain alternative/tradeoff notes.
+- [ ] Freeze exact message schemas, lengths, field order, integer encoding,
+  domain labels and canonicalization for every R1 proof/key and every R2
+  operation. Bind claims to a single supported routine-replacement mode; local
+  compromise recovery is not a remotely selectable claim mode.
+- [ ] Freeze STATE discovery fields, mutual-auth exchange and key confirmation,
+  session ID/sequence widths, request IDs, error receipts and authenticated reply
+  payloads. Define bounded uncertain-enrollment candidate retention and retry
+  resolution; an untrusted unknown must not destroy the last usable key.
+- [ ] Freeze the 20-byte frame layout, response chunk/offset reads, assembly
+  timeout, exact duplicate-fragment rules, pending/busy responses and queue-full
+  behavior. Document maximal encoded request/reply lengths <=512 bytes. Ensure
+  frame metadata leaves actual payload room at minimum MTU.
+- [ ] Freeze load/commit classification and NVS snapshot serialization/version/
+  integrity check. Specify how definitely-uncommitted vs indeterminate writes
+  are established; uncertain outcomes lock and reload.
+- [ ] Pin the PlatformIO platform/framework version after checking compatibility
+  with the current build, mbedTLS/Preferences APIs and BLE handles. Specify Node
+  runtime and exact test commands (proposed Node >=22.18 with TypeScript stripping).
+- [ ] Review the complete contract for active proxy, replay, downgrade, recovery
+  and false-success paths. Resolve findings before vectors/production code.
+- [ ] Commit the approved contract changes; obtain explicit implementation
+  authorization if not already given. Do not start Task 1 merely because this
+  task's document review passed.
 
-Run: `pio test -e native -f test_store`
-Expected: 13 tests, 0 failures.
+Exit: no builder-selected wire format, unreviewed security choice or incompatible
+cross-platform assumption remains. If a decision is unresolved, the dependent
+task stays pending; unrelated documentation may continue.
 
-- [ ] **Step 5: Commit** with message `feat: add gate store for phones, codes and admin key`.
+## Task 1: Independent reference and crypto fixtures
 
----
+**Files:** tools/gate_crypto.ts, tools/gate_crypto.test.ts,
+tools/gen_vectors.ts, tools/gate_protocol.test.ts, docs/test-vectors.json;
+lib/gate_core/crypto_primitives.h and both backends; gate_crypto.h/.cpp;
+test/test_crypto/test_main.cpp; platformio.ini.
 
-### Task 4: `GateProtocol` sessions and unlock commands
+**Interfaces:** TypeScript exports deriveSetupKey, deriveAdminKey,
+deriveInviteSecret, derivePhoneKey, claimProof, joinProof, authClientProof,
+authGateProof, deriveSessionKeys, commandTag, replyTag, enrollmentReceipt,
+encodeInvitation, decodeInvitation, legacyResponse. Each consumes the frozen
+typed transcript/input and returns bytes or a structured validation error.
+C++ equivalents use fixed-size arrays and explicit success/failure, never
+zero-filled substitute keys. The spec is authoritative over either implementation.
 
-**Files:**
-- Create: `lib/gate_core/gate_protocol.h`, `lib/gate_core/gate_protocol.cpp`, `test/test_protocol/test_main.cpp`
+- [ ] Write failing fixture tests for every derivation, receipt, canonical
+  request/reply, full invitation and legacy response. Include tamper_binding:
+  change each bound field independently and reject the old proof.
+- [ ] Implement the TypeScript reference using Node crypto. Generate candidate
+  vectors, independently reproduce them with mbedTLS, then pin reviewed literals
+  in docs/test-vectors.json. Comparing a generator only to its own output is
+  insufficient.
+- [ ] Implement C++ provider wrappers and derivations against the pinned bytes.
+  Cover crypto failure, constant-time tag comparison, invalid hex/Base32,
+  invalid UTF-8, 24/25-byte names, version/checksum/padding mismatch and full
+  66-character Base32 payload round-trip.
+- [ ] Run the frozen Node command (proposed:
+  node --experimental-strip-types --test tools/gate_crypto.test.ts tools/gate_protocol.test.ts)
+  and pio test -e native -f test_crypto. Expect every named fixture to pass;
+  build pio run -e esp32-usb-c-38pin to exercise the ESP32 provider.
+- [ ] Record provider/runtime versions and commit only synthetic fixtures/code.
 
-**Interfaces:**
-- Consumes: Task 2 functions, `GateStore` from Task 3, `FakeBackend` and `countingRandom`.
-- Produces, in `namespace gate`:
+Exit: independently checked vectors cover new protocol plus unchanged legacy;
+no prior vector is silently reused for a newly bound transcript.
 
-```cpp
-struct GateConfig {
-  std::string legacyPin;          // "" when not configured
-  bool setupConfigured = false;
-  Key setupKey{};
-  SetupFingerprint setupFingerprint{};
-  uint64_t sessionMs = 30000;
-  uint64_t lockoutMs = 15000;
-};
-using RandomFn = void (*)(uint8_t* out, size_t len);
-enum class Outcome { Done, Pulse, Locked, BadCommand };
+## Task 2: Durable store and atomic reserved-slot conversion
 
-class GateProtocol {
- public:
-  static constexpr int kProtocolVersion = 2;
-  GateProtocol(const GateConfig& config, GateStore& store, RandomFn random);
-  void onConnect(uint64_t nowMs);
-  void onDisconnect(uint64_t nowMs);
-  Outcome handleCommand(const std::string& rawCommand, uint64_t nowMs);
-  bool authEnabled() const;                       // legacyPin set, or setupConfigured
-  bool legacyAccepted() const;                    // legacyPin set and store.legacyEnabled()
-  std::string authStatus(uint64_t nowMs) const;   // disabled | required | authorized | denied | unknown
-  const std::string& challengeHex() const;        // "disabled" when auth is off
-  const std::string& reply() const;               // "" until a command sets it
-};
-```
+**Files:** lib/gate_core/gate_store.h/.cpp,
+test/support/test_support.h, test/test_store/test_main.cpp.
 
-Rules this task implements:
+**Interfaces:** StoreBackend.load returns Valid/Missing/Corrupt/Unsupported/
+IoFailure plus bytes; StoreBackend.commit returns Committed/NotCommitted/
+Indeterminate. GateStore.begin returns Ready/NeedsProvisioning/RecoveryRequired.
+GateStore.consumeInvite(id, candidateKey, nowMs), replaceAdmin(candidateKey,
+fingerprint), revoke(id), setLegacyEnabled(bool) return classified mutation
+results and new revision on success. Invites use 64-bit expiry; committed
+snapshot covers all persistent authorization fields in R4.
 
-- `handleCommand` trims and uppercases the input itself.
-- The constructor draws no random bytes. The first challenge is made in `onConnect`.
-- Arguments are checked before anything else, so a malformed command always replies `ERR BAD-ARGS`.
-- When the store fails to save, `CLAIM`, `JOIN`, `REVOKE` and `LEGACY` reply `ERR STORE-FAILED` and change nothing.
-- `onConnect` and `onDisconnect` end the session, clear the lockout, clear the reply and make a new challenge of 16 random bytes. This matches today.
-- Every `AUTHRESP`, `AUTH2` and `CLAIM` makes a new challenge, pass or fail.
-- `PED` and `TRIGGER`: `Pulse` when auth is off or a session is active, otherwise `Locked`.
-- `AUTHRESP <hex>`: succeeds only when `legacyAccepted()` and the response matches. Any other case is `denied` and starts the lockout.
-- `AUTH2 ADMIN <proof>`: `denied` plus lockout when there is no admin key or the proof is wrong.
-- `AUTH2 <id8> <proof>`: an id that is not a joined phone gives status `unknown` and no lockout. A wrong proof gives `denied` plus lockout.
-- During a lockout, `AUTHRESP` and `AUTH2` give `denied` without checking, and `CLAIM` replies `ERR LOCKED-OUT`.
-- `CLAIM <np32> <proof64>`: replies `ERR NO-SETUP` when `setupConfigured` is false. A wrong proof replies `ERR DENIED` and starts the lockout. Success stores the new admin key, starts an admin session and replies `OK`.
-- `STATE` needs no session and replies `STATE 2 <adminSet> <legacyOn> <joined> <waiting>` with `0` or `1` for the two flags.
-- Status `unknown` lasts until the next auth command or disconnect.
-- A known verb with wrong arguments replies `ERR BAD-ARGS` and returns `Done`. An unknown verb returns `BadCommand` and leaves the reply unchanged.
-- Proofs are compared with `constantTimeEquals`.
+- [ ] Write failing store_failure_matrix tests for read errors, short blobs,
+  bad checksum/version, duplicate IDs, impossible lengths and missing installed
+  state. Require RecoveryRequired; no default legacy-on or empty healthy store.
+- [ ] Write join_at_capacity for 15 joined + 1 waiting and for 16 waiting:
+  conversion succeeds with total unchanged; a seventeenth reservation fails.
+  Test duplicate join/id collision, expired invitation and failed persistence.
+- [ ] Write reclaim_cancels_invites and reload tests: replacement persists new
+  admin and generation, keeps joined phones/legacy policy, cancels all waiting
+  codes, and invalidates old admin use.
+- [ ] Write commit-boundary tests for all persistent operations: failure before
+  commit preserves old state; success survives reload; uncertain result enters
+  recovery. No stale snapshot may restore revoked access after reported success.
+- [ ] Implement versioned snapshot validation and mutation staging. Keep RAM
+  state unpublished until committed. Failed JOIN retains its invitation unless
+  reboot occurs; committed JOIN reloads even if no success receipt was delivered.
+- [ ] Test setup-fingerprint changes/removal as atomic boot transitions:
+  clear admin/advance generation while keeping tenants and legacy policy;
+  confirmed commit survives reboot and any failed/uncertain commit enters
+  recovery. Gate-ID mismatch instead enters recovery without migration.
+  Also test explicit provisioning, expiry beyond 32-bit uptime and capacity.
+- [ ] Run pio test -e native -f test_store, inspect every fault case, and commit.
 
-- [ ] **Step 1: Write the failing tests** in `test/test_protocol/test_main.cpp`. Each test builds a fresh `FakeBackend`, `GateStore` and `GateProtocol`, calls `resetCountingRandom()` and then `onConnect(0)`. With `countingRandom` the first challenge is `000102030405060708090A0B0C0D0E0F`, so the Task 2 literals apply to the first command.
+Exit: no separate addPhone/removeInvite sequence; no boolean conflating an empty
+store with I/O failure or a rejected write with an uncertain commit.
 
-| Test | Asserts |
+## Task 3: Bounded transport, roles and authenticated sessions
+
+**Files:** lib/gate_core/gate_transport.h/.cpp,
+lib/gate_core/gate_protocol.h/.cpp, test/test_transport/test_main.cpp,
+test/test_protocol/test_main.cpp.
+
+**Interfaces:** GateTransport.acceptFragment(connectionGeneration, bytes, now)
+returns Incomplete/Complete/Rejected; clearConnection drops assembly/replies.
+GateProtocol.onConnect/onDisconnect rotate challenge and clear privileges.
+GateProtocol.handle(message, now) returns a correlated reply and optional
+authorized effect. Explicit session roles: None, Legacy, Tenant, Admin.
+No callback decides authorization by reading the status string.
+
+- [ ] Write framing_matrix: 20-byte payloads, exact maximum/over-limit messages,
+  incomplete/duplicate/inconsistent/out-of-order fragments, total mismatch,
+  5-second expiry and reconnect mid-message. No partial dispatch or allocation
+  above the bounds. Reads must reconstruct the matching stable reply.
+- [ ] Write mutual-auth, role_and_gate_binding, stale_reply, replay and sequence
+  tests. An altered verb/argument/session/gate/role/version/direction or reply
+  must fail. Exact last-request retry returns cached result with no new effect.
+- [ ] Test legacy unchanged with AUTHRESP/PED/TRIGGER during migration; legacy
+  cannot LIST/INVITE/REVOKE/LEGACY. New sessions cannot authorize raw PED/TRIGGER.
+  Legacy-off denies even the correct old passphrase; errors never downgrade.
+- [ ] Test current-credential checks at dispatch and successful CLAIM invalidation:
+  authenticate old admin, claim a replacement, then reject old-session envelopes
+  and queued work. Revoked/changed credentials and disabled legacy cannot borrow
+  an otherwise unexpired session. Document legacy's remaining integrity risk.
+- [ ] Test connection_deadlines: repeated reads cannot extend the 15-second
+  unauthenticated deadline or 60-second hard cap; failure backoff survives
+  reconnect within one boot. Confirm session expiry at 30 seconds.
+- [ ] Implement the frozen frame/session contract using Task 1 crypto and
+  explicit role state; bound work and caches. Authentication failure clears
+  privilege; unauthenticated status remains advisory.
+- [ ] Run pio test -e native -f test_transport and
+  pio test -e native -f test_protocol, then commit.
+
+Exit: no unprotected privileged verb remains reachable through version 2;
+discovery is deliberately distinct from authenticated state.
+
+## Task 4: Enrollment and administration with trustworthy outcomes
+
+**Files:** lib/gate_core/gate_protocol.h/.cpp,
+test/test_protocol/test_main.cpp; use Task 2 store interfaces.
+
+**Interfaces:** handle maps verified operations to consumeInvite, replaceAdmin,
+revoke and setLegacyEnabled. Enrollment success produces a candidate-key receipt,
+not an implicitly authorized session. Pending/failed storage is not OK.
+
+- [ ] Write invite/join/revoke/list/legacy happy-path tests plus rejection for
+  wrong role, bad proof, malformed arguments, stale list revision and invalid TTL.
+- [ ] Write lost_join_receipt: committed candidate authenticates after reload;
+  uncommitted join keeps the invitation while powered; reboot cancels it.
+  Wrong JOIN proof does not consume the invitation; used code cannot join twice.
+- [ ] Write lost_claim_receipt and reclaim tests: candidate admin authenticates
+  after lost acknowledgment; old admin fails; joined tenants survive and waiting
+  codes cannot be reopened/reused. CLAIM/JOIN alone must not permit PED.
+- [ ] Test failure/indeterminate persistence for every mutation, signed error
+  results after valid session auth, mismatched receipts and replayed receipts.
+- [ ] Implement command effects, list revision/expiry semantics and persistence
+  receipts. Remove named entries by ID, not by a stale list index.
+- [ ] Run pio test -e native -f test_protocol and all native tests; commit.
+
+Exit: R2/R3 effects and R4 durability hold for both success and uncertain outcomes.
+
+## Task 5: ESP32 integration and relay scheduling
+
+**Files:** src/main.cpp, src/nvs_backend.h/.cpp, platformio.ini,
+include/app_config.h, include/app_config_local.example.h,
+test/test_scheduler/test_main.cpp; root README.md/AGENTS.md/CLAUDE.md and
+docs/architecture.md as runtime behavior is implemented.
+
+**Interfaces:** NvsBackend implements Task 2 classifications, checking namespace
+open/length/read/write results and readback/validation as frozen in Task 0.
+A bounded command queue carries connection generation and original deadline.
+One owner serializes protocol/store access. Reply reads obtain an immutable
+snapshot for a request; asynchronous PENDING cannot expose a previous OK.
+
+- [ ] Write scheduler tests: pulse release precedes optional work; no NVS write
+  starts during a pulse; full queue rejects safely; reconnect/expiry cancels old
+  work; no pulse is retained for later execution. Test millis rollover at the
+  existing cooldown boundary as well as 64-bit protocol time.
+- [ ] Add explicit Bench/Provisioning/Installed configuration, setup secret and
+  gate ID placeholders, reply characteristic, bounded queue and status adapter.
+  Check BLE service handle capacity with the pinned framework. Set relay idle
+  before KDF, store initialization or advertising; failures enter recovery.
+- [ ] Implement NVS classification and installed-mode startup. Check ESP32 core
+  startup behavior for automatic NVS erase/reinitialization; do not depend on
+  erased marker state to authorize fresh provisioning.
+- [ ] Integrate onConnect/onDisconnect/activity deadlines and synchronized
+  read replies. Remove raw command/proof logging. Time KDF without printing
+  inputs; do not lower rounds automatically if slow.
+- [ ] Keep pulse/cooldown intent fixed. Prefer rejecting mutations as BUSY while
+  pulsing. If existing rollover or integration behavior prevents the acceptance
+  target, surface a specific supporting fix and revise scope before changing it.
+- [ ] Run all native tests and pio run -e esp32-usb-c-38pin; review the actual
+  hardware-control diff. Builds are necessary but do not establish timing.
+- [ ] Update runtime docs with implemented behavior, new config, migration,
+  compatibility limits and unperformed checks; commit.
+
+Exit: software integration verified, no claim of hardware readiness yet.
+
+## Task 6: Early real Android and iPhone proof
+
+**Files:** future debug-only ProtocolProbe.kt and ProtocolProbe.swift paths above;
+existing MainActivity.kt and GateBLEManager.swift only for probe entry/transport
+wiring; ios-app/D5EvoBleGate.xcodeproj/project.pbxproj if needed for the probe.
+Update applicable app README/AGENTS/CLAUDE files and docs/architecture.md.
+Do not build full admin screens under this task.
+
+**Interfaces:** each probe consumes docs/test-vectors.json and implements the
+same framed request/reply and candidate-storage rules. Probe installation is on
+owner-controlled test phones with synthetic bench credentials.
+
+- [ ] Add vector tests in the native app test targets; create target wiring if
+  absent. Test no_credential_deletion for denied/unknown, forged server replies,
+  timeout and stale challenge. Save candidates before send; fail storage -> no send.
+- [ ] Test app kill and lost receipt with up to two unresolved candidate keys:
+  try mutual AUTH2 first, never auto-reenroll, require explicit retry setup/join
+  and preserve both candidates at the cap. Bad server proof cannot cause eviction.
+- [ ] Implement only claim, invite export/import, join, mutual auth, PED,
+  revoke and legacy-toggle diagnostic flows. Gate admin mutation/export with
+  OS authentication per D8; do not store setup secrets in builds.
+- [ ] Test the maximum messages at minimum supported payload, normal negotiated
+  MTU, reply correlation, background/disconnect and reconnect on actual Android
+  and iPhone. Exercise interrupted CLAIM/JOIN before and after device persistence.
+- [ ] Test replay/tamper without a real gate attached, uncertain-PED no retry,
+  secure-storage failure, restore exclusion and invalidation/reinstall recovery.
+  Authentication failures must retain recoverable candidate/previous keys.
+- [ ] Run Android permission tests and assembleDebug; run the iOS simulator
+  build plus new app vector tests. Then record real-device BLE results separately.
+- [ ] Record phone/OS/framework/firmware versions and evidence in
+  docs/architecture.md. Commit the minimal probes and documentation.
+
+Exit: both platforms establish interoperable transport and recovery behavior.
+A missing phone or failing platform leaves this gate pending; do not substitute
+a simulator, TypeScript arithmetic check or laptop BLE success.
+
+## Task 7: Fault injection and measured disconnected bench gate
+
+**Files:** test/support/test_support.h and relevant native tests for newly found
+faults; docs/architecture.md for dated measured evidence.
+**Requires:** owner, ESP32/relay on bench, suitable pulse measurement equipment,
+and NO connection from relay contacts to the live D5-Evo.
+
+- [ ] Run the matrix below with synthetic credentials; record actual outcomes
+  rather than pre-marking rows passed. Separate automated failure injection from
+  physical power-cut tests.
+- [ ] Record min/max GPIO and contact pulse durations under each load, idle
+  continuity, boot/reset behavior and cooldown. Proposed GPIO acceptance target
+  is 480-520 ms while normally powered. Reset/brownout/power interruption has no
+  minimum duration; proposed fault target is deenergization within 520 ms of the
+  original activation, no extra pulse and open contacts after supply stabilizes.
+  Record actual GPIO and contact cutoff, not just the software command time.
+- [ ] On any failure, stop dependent release work, preserve evidence and revise
+  the spec/plan before selecting a broader timing/hardware fix.
+- [ ] Commit evidence and necessary authorized fixes with their tests. Hardware
+  verification remains incomplete until every applicable row has an outcome.
+
+| Bench case | Acceptance |
 | --- | --- |
-| `test_auth_disabled_when_nothing_configured` | Empty pin, no setup: `authStatus` is `disabled`, `challengeHex()` is `disabled`, `PED` returns `Pulse`. |
-| `test_ped_locked_before_auth` | Pin `bench-pass`: `PED` returns `Locked`, status `required`. |
-| `test_legacy_authresp_then_ped` | `AUTHRESP F9A8B42C…7769` (full literal from Task 2): status `authorized`, `PED` returns `Pulse`. `trigger` in lowercase also returns `Pulse`. |
-| `test_session_expires` | After the above, at `nowMs = 30000` status is `required` and `PED` returns `Locked`. |
-| `test_wrong_authresp_locks_out` | Wrong hex: status `denied`. The correct response for the new challenge at `nowMs = 1000` is still `denied`. At `nowMs = 15000` status is `required`. |
-| `test_challenge_rotates_after_each_attempt` | `challengeHex()` differs before and after an `AUTHRESP`. |
-| `test_legacy_off_denies_correct_passphrase` | `store.setLegacyEnabled(false)`, setup configured, pin `bench-pass`: the correct `AUTHRESP` gives `denied`, and `PED` returns `Locked`. |
-| `test_setup_only_requires_auth` | Empty pin, setup configured: status `required`, any `AUTHRESP` gives `denied`. |
-| `test_claim_with_vector` | Setup configured with the Task 2 `setupKey`. `CLAIM 101112131415161718191A1B1C1D1E1F 1ED62E11…F054`: reply `OK`, `hexEncode(store.adminKey())` is `DAD34BE6…6126`, status `authorized`, `PED` returns `Pulse`. |
-| `test_claim_wrong_proof` | Reply `ERR DENIED`, `store.hasAdminKey()` false, a second correct claim at once replies `ERR LOCKED-OUT`. |
-| `test_claim_without_setup` | Reply `ERR NO-SETUP`. |
-| `test_second_claim_replaces_admin_key` | Claim, reconnect, claim again with proofs computed by `claimProof` for the new challenge: the stored admin key changed, and `AUTH2 ADMIN` with a proof from the first key gives `denied`. |
-| `test_auth2_phone` | Add a phone with a known key to the store. `AUTH2 <id> <authProof(key, challenge)>`: status `authorized`, `PED` returns `Pulse`. |
-| `test_auth2_unknown_id` | `AUTH2 DEADBEEF <64 hex>`: status `unknown`, `PED` returns `Locked`. A correct `AUTH2` for a real phone straight after succeeds, which shows no lockout started. |
-| `test_auth2_wrong_proof_locks_out` | Status `denied`, then a correct proof at once is still `denied`. |
-| `test_auth2_admin_without_admin_key` | Status `denied`. |
-| `test_state_reply` | Fresh gate with setup and pin: `STATE` replies `STATE 2 0 1 0 0`. After a claim and one added phone: `STATE 2 1 1 1 0`. |
-| `test_reconnect_ends_session` | Authorize, `onDisconnect`, `onConnect`: status `required`, reply is `""`. |
-| `test_malformed_commands_change_nothing` | For each of `AUTH2`, `AUTH2 A1B2C3D4`, `AUTH2 A1B2C3D4 ABC`, `AUTH2 A1B2C3D4 <63 hex>`, `CLAIM 00 11`, `AUTHRESP`, and a 500-character string of `Z`: no crash, status stays `required`, phones and admin key unchanged. The first five reply `ERR BAD-ARGS`. `AUTHRESP` with no argument and the `Z` string return `BadCommand`. |
+| Old app before migration cutover | Same legacy auth/pulse works; no admin privileges |
+| Legacy disabled, then reboot | Correct old passphrase denied; no contact closure |
+| Claim/reclaim with pending invitation | New admin works; old admin and old invitation fail; existing tenant works |
+| Join with all 16 entries reserved | Conversion succeeds; total unchanged; seventeenth invitation rejected |
+| Drop link before/after CLAIM or JOIN save/receipt | Candidate recovery is reliable; no silent key deletion or false success |
+| Inject NVS open/read/write failures and truncated/corrupt state | Installed mode refuses electronic access; no reset to legacy/no-auth |
+| Cut power during REVOKE and LEGACY 0, before/after acknowledgment | Acknowledged policy survives; uncertain operation reconciles or enters recovery |
+| Replay/modify frames, requests and replies | No unintended pulse/mutation; no client credential deletion |
+| Read flood without auth and repeated reconnect | Deadlines/backoff enforced; no indefinite single-connection ownership |
+| Storage/crypto/fragment load at pulse boundaries | GPIO within proposed bound; no double pulse; contacts open at idle |
+| Reboot, watchdog reset, supply dip, power restoration | No unintended closure/retrigger; waiting invitations canceled |
+| Fresh provisioning then installed build; erase installed NVS | Expected initial policy; erased installed state stays locked |
+| Routine admin replacement vs compromise recovery | Routine keeps tenants; full local recovery invalidates all old credentials |
+| Unknown outcome after PED | No automatic repeat, including after cooldown or reconnect |
+| Mobile background/permission revocation/secure storage failure | Safe disconnect/retry state, no stale queued action |
+| Protocol clock beyond 49.7 days (injected clock) | Invitations/session/connection deadlines behave correctly |
 
-- [ ] **Step 2: Run and see it fail**
+## Task 8: Documentation handoff and full app plans
 
-Run: `pio test -e native -f test_protocol`
-Expected: build error, `gate_protocol.h` not found.
+**Files:** docs/architecture.md, root/app README.md/AGENTS.md/CLAUDE.md as
+applicable; future iOS and Android plans under docs/superpowers/plans/.
 
-- [ ] **Step 3: Implement `gate_protocol.h` and `gate_protocol.cpp`** for the rules above. Leave `INVITE`, `JOIN`, `LIST`, `REVOKE` and `LEGACY` returning `BadCommand` for now.
+- [ ] Audit implementation and tests against R1-R7 and ratified D1-D9. Record
+  any incomplete requirements instead of declaring completion from green builds.
+- [ ] Document exact provisioning -> installed workflow, backup/recovery,
+  legacy cutover/re-enable warning, upgrade/schema compatibility, no rollback
+  guarantee without secure boot, and fallback access.
+- [ ] Write separate full app plans covering R7 screens, QR scanning permissions,
+  device-only storage, OS-authenticated admin actions, offline state, honest
+  failure/trigger copy and migration. Use the proven contract and fixtures.
+- [ ] Require a supported app installation/signing route before everyday use.
+  Store publishing and additional features remain separate work.
+- [ ] Record which hardware checks were actually performed. A later supervised
+  live-gate test requires explicit installation authorization and completed bench
+  checks; this plan does not authorize operating the gate.
+- [ ] Commit the handoff documentation and present remaining decisions to owner.
 
-- [ ] **Step 4: Run and see it pass**
+## Current review status
 
-Run: `pio test -e native -f test_protocol`
-Expected: 19 tests, 0 failures.
-
-- [ ] **Step 5: Commit** with message `feat: add gate protocol sessions, claim and per-phone unlock`.
-
----
-
-### Task 5: `GateProtocol` admin commands
-
-**Files:**
-- Modify: `lib/gate_core/gate_protocol.cpp`, `test/test_protocol/test_main.cpp`
-
-**Interfaces:**
-- Consumes: everything from Tasks 2 to 4.
-- Produces: no new C++ names. These commands and replies:
-
-| Command | Reply on success | Failure replies |
-| --- | --- | --- |
-| `INVITE <ttlSeconds> <nameHex>` | `INVITE <id8> <ni32>` | `ERR NOT-ADMIN`, `ERR BAD-ARGS`, `ERR FULL` |
-| `JOIN <id8> <np32> <proof64>` | `OK` | `ERR BAD-ARGS`, `ERR LOCKED-OUT`, `ERR NOT-FOUND`, `ERR DENIED`, `ERR STORE-FAILED` |
-| `LIST <index>` | `PHONE <index> <total> <id8> J 0 <nameHex> -` or `PHONE <index> <total> <id8> W <secondsLeft> <nameHex> <ni32>` | `ERR NOT-ADMIN`, `ERR BAD-ARGS`, `ERR NOT-FOUND` |
-| `REVOKE <id8>` | `OK` | `ERR NOT-ADMIN`, `ERR BAD-ARGS`, `ERR NOT-FOUND` |
-| `LEGACY <0 or 1>` | `OK` | `ERR NOT-ADMIN`, `ERR BAD-ARGS` |
-
-Rules:
-
-- `INVITE`, `LIST`, `REVOKE` and `LEGACY` need an active admin session. A phone session or a legacy session gets `ERR NOT-ADMIN`.
-- `INVITE`: `ttlSeconds` is 60 to 604800. `nameHex` is 2 to 48 hex characters with an even length. The gate draws 4 random bytes for the id, then 16 for `Ni`. If the id is already in use it draws again. The secret is `deriveInviteSecret(adminKey, id, Ni)`. Expiry is `nowMs + ttlSeconds * 1000`.
-- `JOIN` needs no session and does not start one. It makes a new challenge, pass or fail. A wrong proof replies `ERR DENIED`, starts the lockout and keeps the code. A missing or expired code replies `ERR NOT-FOUND` with no lockout. Success stores the phone with `derivePhoneKey(secret, challenge, Np)` and the code's name, then deletes the code. If the phone cannot be saved, the code is kept.
-- `LIST` orders joined phones first, in stored order, then waiting codes. `<total>` is the count of both. `<secondsLeft>` rounds down.
-- `REVOKE` removes a joined phone or a waiting code.
-
-- [ ] **Step 1: Write the failing tests.** A helper `claimAdmin(protocol, config)` claims with a proof from `claimProof`. A helper `inviteAndJoin(...)` runs `INVITE`, reconnects, then sends `JOIN` with proofs from `joinProof`, and returns the phone key.
-
-| Test | Asserts |
-| --- | --- |
-| `test_admin_commands_need_admin` | With no session, with a legacy session and with a phone session: `INVITE 600 414243`, `LIST 0`, `REVOKE A1B2C3D4` and `LEGACY 0` each reply `ERR NOT-ADMIN`, and the store is unchanged. |
-| `test_invite_reply_and_secret` | After a claim, `INVITE 600 414243` replies `INVITE <8 hex> <32 hex>`. The stored invite has name `ABC`, and its secret equals `deriveInviteSecret(adminKey, id, ni)` computed from the reply. |
-| `test_join_then_unlock` | `inviteAndJoin`, then `AUTH2 <id> <authProof(phoneKey, challenge)>` gives `authorized`, `PED` returns `Pulse`. The invite is gone and the phone's stored name is `ABC`. |
-| `test_join_does_not_start_session` | After a successful `JOIN`, `PED` returns `Locked`. |
-| `test_join_wrong_proof_keeps_code` | Reply `ERR DENIED`. The invite still exists. After the lockout time, a correct `JOIN` replies `OK`. |
-| `test_auth2_for_waiting_code_is_unknown` | `AUTH2` with the id of a code that has not been used yet gives status `unknown` and no lockout. The joining app relies on this to know it must send `JOIN` again. |
-| `test_join_code_works_once` | A second `JOIN` with the same id replies `ERR NOT-FOUND`. |
-| `test_join_expired_code` | `INVITE 60 …` at `nowMs = 0`. `JOIN` at `nowMs = 60000` replies `ERR NOT-FOUND`. |
-| `test_list_phones_then_codes` | One joined phone `ABC` and one waiting code `DEF` with 600 s left, listed at 1500 ms after it was created: `LIST 0` is `PHONE 0 2 <id> J 0 414243 -`, `LIST 1` is `PHONE 1 2 <id> W 598 444546 <ni>`, `LIST 2` is `ERR NOT-FOUND`. |
-| `test_revoke_phone_gives_unknown` | Revoke a joined phone, reconnect: its `AUTH2` gives status `unknown` and `PED` returns `Locked`. |
-| `test_revoke_waiting_code` | Revoke a waiting code: `JOIN` for it replies `ERR NOT-FOUND`. |
-| `test_revoke_unknown_id` | Reply `ERR NOT-FOUND`. |
-| `test_legacy_switch` | `LEGACY 0` replies `OK` and `store.legacyEnabled()` is false. `STATE` shows `legacyOn` as `0`. `LEGACY 1` turns it back on. `LEGACY 2` replies `ERR BAD-ARGS`. |
-| `test_invite_fails_when_full_then_succeeds_after_revoke` | Fill the store to 16 entries. `INVITE` replies `ERR FULL`. After one `REVOKE`, `INVITE` succeeds. |
-| `test_invite_bad_args` | `INVITE 59 4142`, `INVITE 604801 4142`, `INVITE 600 414`, `INVITE 600` followed by 50 hex characters, and `INVITE 600 ZZ` each reply `ERR BAD-ARGS`. |
-| `test_codes_survive_admin_reclaim` | Create a code, reconnect, claim admin again. The earlier code still joins. |
-
-- [ ] **Step 2: Run and see it fail**
-
-Run: `pio test -e native -f test_protocol`
-Expected: the 16 new tests fail, the 19 from Task 4 pass.
-
-- [ ] **Step 3: Implement the five commands** in `gate_protocol.cpp`.
-
-- [ ] **Step 4: Run all native tests**
-
-Run: `pio test -e native`
-Expected: 59 tests, 0 failures.
-
-- [ ] **Step 5: Commit** with message `feat: add invite, join, list, revoke and legacy switch commands`.
-
----
-
-### Task 6: Wire the library into the firmware
-
-**Files:**
-- Create: `src/nvs_backend.h`, `src/nvs_backend.cpp`
-- Modify: `src/main.cpp`, `include/app_config.h`, `include/app_config_local.example.h`, `README.md`, `AGENTS.md`, `CLAUDE.md`, `docs/architecture.md`
-
-**Interfaces:**
-- Consumes: `gate::GateProtocol`, `gate::GateStore`, `gate::StoreBackend`, `gate::GateConfig`, `gate::deriveSetupKey`, `gate::deriveSetupFingerprint`.
-- Produces: `class NvsBackend : public gate::StoreBackend` using `Preferences` namespace `"d5gate"`. Config values `AppConfig::kAdminSetupCode` (from `D5_EVO_ADMIN_SETUP_CODE`, default `""`) and `AppConfig::kReplyCharUuid = "4b8c2ec4-3f66-4f00-8a43-95f79d2c0cc7"`.
-
-This task has no native test. Its checks are the two builds and the bench test in Task 7.
-
-- [ ] **Step 1: Add the config values** to `include/app_config.h` and document `D5_EVO_ADMIN_SETUP_CODE` in `include/app_config_local.example.h`. The comment says: leave empty to turn admin features off; use at least four random words or 20 characters; keep it in a password manager because it is the recovery key.
-
-- [ ] **Step 2: Implement `NvsBackend`.** `load` uses `getBytesLength` and `getBytes`. `save` uses `putBytes` and returns false when fewer bytes were written than asked.
-
-- [ ] **Step 3: Replace the auth code in `src/main.cpp`.**
-  - Remove `computeAuthResponseHex`, `sha256Digest`, `appendSha256`, `authenticateSession`, `generateAuthChallenge`, `authWindowActive`, `authLockoutActive`, and the globals `g_authorizedUntilMs`, `g_authLockoutUntilMs`, `g_authChallengeHex`.
-  - Add `uint64_t uptimeMs()` returning `esp_timer_get_time() / 1000`. Pass it wherever the protocol wants `nowMs`.
-  - In `setup()`, before `initBle()`: build `GateConfig` from `AppConfig`. When `kAdminSetupCode` is not empty, call `deriveSetupKey`, time it with `millis()`, and print `Setup key stretch: <n> ms`. Call `store.begin(...)` with the fingerprint, or `nullptr` when no setup code is set.
-  - `GateServerCallbacks` calls `protocol.onConnect` and `protocol.onDisconnect`.
-  - `CommandCallbacks::onWrite` calls `protocol.handleCommand(raw, uptimeMs())` and maps the outcome: `Pulse` calls `pulsePedestrianRelay()`, `Locked` sets controller status `locked`, `BadCommand` sets `bad-command`, `Done` sets nothing. After every command it writes `protocol.challengeHex()` to the challenge characteristic, `protocol.reply()` to the reply characteristic, and refreshes auth status. All of this happens inside the callback, so the reply is in place before the phone's write completes.
-  - `syncAuthStatus` and `updateAuthState` take the status string from `protocol.authStatus(uptimeMs())`.
-  - `updateBleClientLease` ends the session through `protocol.onDisconnect` before it disconnects an idle client.
-  - Add the reply characteristic in `initBle()`: read only, with `ClientActivityCallbacks`, initial value `""`.
-  - Info text: `Write PED` when auth is off. `Read challenge, write AUTHRESP <hex>, then PED` when `legacyAccepted()`. Otherwise `Join with a code from the gate owner`.
-  - `printStartupSummary` prints whether a setup code is configured, whether an admin key is stored, whether the shared passphrase is accepted, and the phone count. It prints no key and no code.
-  - `loop()` may call only `protocol.authStatus`. Every other call on the protocol and the store happens inside BLE callbacks, as the auth code does today.
-  - Do not touch `pulsePedestrianRelay`, `updateRelayPulse`, `updateCooldown` or `relayInactiveLevel`.
-
-- [ ] **Step 4: Build**
-
-Run: `pio run -e esp32-usb-c-38pin`
-Expected: `SUCCESS`.
-
-- [ ] **Step 5: Run the native tests again**
-
-Run: `pio test -e native`
-Expected: 59 tests, 0 failures.
-
-- [ ] **Step 6: Check the relay code is untouched**
-
-Run: `git diff main -- src/main.cpp | grep -E '^[-+].*(digitalWrite|kRelay|g_relay|kCooldownMs)'`
-Expected: no output.
-
-- [ ] **Step 7: Update the docs.**
-  - `docs/architecture.md`: add the reply characteristic to the BLE surface table. Add the command table and the keys-and-proofs table from the spec. Replace the auth state diagram so it shows `unknown` and the two ways to get a session. Add the test vectors by pointing at `docs/test-vectors.json` and `tools/gate_crypto.py`. Add `pio test -e native` and `cd tools && python3 -m unittest test_gate_crypto` to the verification matrix. Describe what is in NVS and that `pio run -t erase` wipes it.
-  - `README.md`: the setup code, the four config combinations from the spec, and the four migration steps.
-  - `CLAUDE.md` and `AGENTS.md`: add `lib/gate_core`, `tools/` and the test commands to key files and commands. Add to "What To Preserve": no key or secret over BLE or serial; derivations must match `tools/gate_crypto.py`.
-
-- [ ] **Step 8: Commit** with message `feat: use gate_core in firmware and store phones in NVS`.
-
----
-
-### Task 7: Bench client and bench test
-
-**Files:**
-- Create: `tools/gate_cli.py`, `tools/requirements.txt` (one line: `bleak`)
-- Modify: `.gitignore` (add `tools/.gate_cli.json`), `CLAUDE.md` and `AGENTS.md` (list that file under local secrets), `docs/architecture.md` (how to run the bench client)
-
-**Interfaces:**
-- Consumes: `tools/gate_crypto.py`, the UUIDs in `include/app_config.h`, the commands from Tasks 4 and 5.
-- Produces: a command-line client with these subcommands. Each one scans for the service UUID, connects, does its work and disconnects.
-
-| Subcommand | What it does |
-| --- | --- |
-| `state` | Writes `STATE`, prints the reply and the auth status. |
-| `claim` | Asks for the setup code with `getpass`. Sends `CLAIM`. Saves the admin key. |
-| `invite --name NAME --ttl SECONDS` | Admin session, `INVITE`. Prints the id and the code secret as hex. |
-| `join --id ID --secret HEX --as LABEL` | Saves the candidate phone key under `LABEL`, sends `JOIN`, then checks with `AUTH2`. |
-| `ped --as LABEL` | `AUTH2` with that phone's key, or the admin key for `--as admin`, then `PED`. Prints both statuses. |
-| `list` | Admin session, `STATE`, then `LIST 0..n-1`. Prints names decoded from hex. |
-| `revoke --id ID` | Admin session, `REVOKE`. |
-| `legacy --on` / `legacy --off` | Admin session, `LEGACY`. |
-| `legacy-ped` | Asks for the shared passphrase with `getpass`, sends `AUTHRESP`, then `PED`. Stands in for an old app. |
-
-Keys are saved in `tools/.gate_cli.json`. The file is ignored by git. The setup code and the passphrase are never taken from command-line arguments and never saved.
-
-- [ ] **Step 1: Write `tools/gate_cli.py`** with `argparse` and `bleak`. All writes are write-with-response. After each command write, read the reply characteristic, then the auth status characteristic.
-
-- [ ] **Step 2: Check it starts**
-
-Run: `python3 -m pip install -r tools/requirements.txt && python3 tools/gate_cli.py --help`
-Expected: the nine subcommands are listed.
-
-- [ ] **Step 3: Commit** with message `feat: add laptop bench client for the gate`.
-
-- [ ] **Step 4: Bench test on real hardware.** This step needs the owner, the ESP32 on the bench with the relay connected, and nothing wired to the gate. Flash with a shared passphrase and a setup code set in `include/app_config_local.h`. Watch the serial monitor throughout. `CLAIM`, `JOIN`, `REVOKE` and `LEGACY` write to flash inside the BLE callback. If the serial log shows a stack overflow or a reset during rows 5, 6, 10 or 12, stop and report it. The fix is to move saves into `loop()`, which changes Task 3 and needs the plan revised.
-
-| # | Do | Expect |
-| --- | --- | --- |
-| 1 | Boot | `Setup key stretch` is under 2000 ms. If it is over, halve `kSetupRounds` in `gate_crypto.h` and `ROUNDS` in `tools/gate_crypto.py`, rerun `gen_vectors.py`, update the literals in `test/test_crypto` and `tools/test_gate_crypto.py`, and start Task 7 Step 4 again. |
-| 2 | `state` | `STATE 2 0 1 0 0` |
-| 3 | `legacy-ped` | Relay clicks once. |
-| 4 | Open the current phone app and press Pedestrian | Relay clicks once. This is the old-app check. |
-| 5 | `claim` with a wrong code, then the right code after 15 s | `ERR DENIED`, then `OK`. |
-| 6 | `invite --name Bench --ttl 600`, then `join … --as bench`, then `ped --as bench` | Relay clicks once. |
-| 7 | `list` | One joined phone named `Bench`. |
-| 8 | Unplug and replug the ESP32, then `ped --as bench` | Relay clicks once. |
-| 9 | `invite --name Lost --ttl 600`, unplug and replug, `list` | `Lost` is gone. `Bench` is still there. |
-| 10 | `legacy --off`, then `legacy-ped`, then the current phone app | Both denied. No click. |
-| 11 | `legacy --on`, then `legacy-ped` | Relay clicks once. |
-| 12 | `revoke` Bench's id, then `ped --as bench` | Auth status `unknown`. No click. |
-| 13 | `ped --as admin` | Relay clicks once. |
-| 14 | Connect with any BLE tool and stay idle for 60 s | The gate disconnects the client. |
-| 15 | At idle, measure relay `COM` to `NO` | Open. |
-
-- [ ] **Step 5: Record the result.** Add a dated line to `docs/architecture.md` under the verification matrix saying which rows passed, and commit. If any row failed, stop and report it. Do not mark the plan done.
-
----
-
-## After this plan
-
-- Write the iOS plan, then the Android plan. Each uses `docs/test-vectors.json` for unit tests and the command table in the spec.
-- Publishing to the App Store and Play Store is a separate project.
+- No tasks executed, no product files changed, no hardware tests performed.
+- D1-D9 are proposed defaults awaiting review.
+- Task 0's exact contract is still a prerequisite, not an invitation for each
+  implementer to invent protocol details independently.
+- The next action after this docs-only PR update is owner review of the defaults,
+  followed by contract finalization within the agreed scope. Implementation
+  requires a separate explicit request.
