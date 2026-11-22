@@ -23,8 +23,8 @@ These are the inspected local baseline pinned by spec C8 for future implementati
 no package installation, configuration change or clean build occurred in this PR.
 
 **Spec:** [Phone admin design](../specs/2026-11-21-phone-admin-design.md), revision
-2026-11-22, accepted decisions D1-D9, requirements R1-R7, normative contract
-C1-C9 and synthetic examples C10. D9 numeric tolerance remains provisional.
+2026-11-22, accepted decisions D1-D9, requirements R1-R8, normative contract
+C1-C9/C11 and synthetic examples C10. D9 numeric tolerance remains provisional.
 
 This replaces the earlier seven-task plan and its 59-test promise. The previous
 crypto literals describe an obsolete proposal except the unchanged legacy
@@ -62,11 +62,18 @@ points, not the final onboarding screens. Its future file scope is named below.
 - Framing must support 20-byte write payloads, 512-byte reassembled messages,
   one outstanding request and a 5 second assembly deadline.
 - Session duration 30 seconds, unauthenticated connection deadline
-  15 seconds, hard connection cap 60 seconds, auth backoff 15 seconds across
-  reconnects within one boot; preserve the existing 60 second idle safeguard.
+  15 seconds, hard connection cap 60 seconds; V2 failures are connection-local
+  counts with disconnect at three, never a gate-wide/claimed-ID timed penalty.
+  Legacy 15-second backoff remains connection-local and isolated; preserve the
+  existing 60 second idle safeguard.
 - Installed storage/crypto failures lock electronic commands. No implicit
   no-auth, legacy reenablement, NVS erase or rollback to stale permissions.
 - No automatic retry of a physical trigger after an uncertain result.
+- A user transaction owns the connection: collect input/OS auth first, connect
+  only for the action, then disconnect after verified terminal reply/error.
+  Client operation deadline is 10000 ms; inflight action results may be unknown.
+- Respect R8 hardware/resource/stress gates and C11's 31-byte advertisement
+  limits. No larger MTU, PSRAM or replacement controller is assumed.
 - No secrets in BLE values, logs, tracked files or app builds. Do not read or
   print real local secret files. Use fixed synthetic inputs for test evidence.
 - Runtime docs change alongside future runtime implementation, not in this PR.
@@ -84,7 +91,8 @@ points, not the final onboarding screens. Its future file scope is named below.
 | Flash/crypto workload around a relay pulse | Measured timing bound, no duplicate pulse or unexpected closure on recovery | Tasks 5/7: pulse_workload_matrix, reset_brownout, uncertain_ped |
 
 R1 maps to Tasks 0-1/3; R2 to 3-4/6; R3 to 1-2/4/6;
-R4 to 2/5/7; R5 to 0/3/5/6; R6 to 5/7; R7 to 6-8.
+R4 to 2/5/7; R5 to 0/3/5/6; R6 to 5/7; R7 to 6-8;
+R8 to 5-7; C11 to 1/5/6. Pilot distribution is a gate before tenant testing.
 A test count is not a substitute for this coverage.
 
 ## Planned file structure
@@ -101,6 +109,7 @@ These are future implementation paths, not files created by this docs-only PR.
 | lib/gate_core/gate_store.h/.cpp | Snapshot validation, atomic enrollment, persistent policy |
 | lib/gate_core/gate_protocol.h/.cpp | Explicit roles, sessions, requests and reply correlation |
 | lib/gate_core/gate_transport.h/.cpp | Bounded framing/reassembly |
+| lib/gate_core/gate_discovery.h/.cpp, test/test_discovery/test_main.cpp | Bounded C11 advertising payloads and hint calculation, independent of Arduino |
 | src/nvs_backend.h/.cpp | Native ESP-IDF NVS adapter, gatecfg partition and C7 failure classification |
 | src/main.cpp, include/app_config.h, include/app_config_local.example.h | Queue integration, relay arbitration, provisioning profiles/config |
 | platformio.ini, partitions.csv | Pinned target/native tests and C8 partition layout preserving firmware offsets |
@@ -121,7 +130,7 @@ client is optional follow-up tooling, not a release dependency.
 **Files:** this plan and the linked spec only.
 **Consumes:** owner's acceptance of D1-D9 on 2026-11-22, with D9 timing
 provisional; read-only inspection of current firmware/provider sources.
-**Produces:** exact C1-C9 contract and synthetic examples C10. This is design
+**Produces:** C1-C9/C11 contract and synthetic examples C10. This is design
 completion, not production implementation or validation.
 
 - [x] Record D1-D9 acceptance, readability/privacy tradeoff and D9 qualification.
@@ -138,6 +147,10 @@ completion, not production implementation or validation.
   CLI calculations; include results and verification limits in C10.
 - [x] Perform a builder check of the written contract and incorporate material
   findings before publishing the document revision.
+- [x] Resolve PR review gaps in V2 abuse limits, discovery, transaction/recovery
+  flows and screen definitions; retain accepted crypto and fixed framing.
+- [x] Specify concrete hardware-boundary stress tests and provisional resource/
+  latency gates. This documents tests; none is marked physically performed.
 
 Exit: the contract is ready for implementation review, with D9 physical limits
 explicitly provisional. Do not execute Task 1 without a new explicit request.
@@ -149,13 +162,17 @@ unchecked; document arithmetic checks do not satisfy those gates.
 **Files:** tools/gate_crypto.ts, tools/gate_crypto.test.ts,
 tools/gen_vectors.ts, tools/gate_protocol.test.ts, docs/test-vectors.json;
 lib/gate_core/crypto_primitives.h and both backends; gate_crypto.h/.cpp;
+lib/gate_core/gate_discovery.h/.cpp, test/test_discovery/test_main.cpp;
 test/test_crypto/test_main.cpp; platformio.ini.
 
-**Interfaces:** Implement the exact C1-C9 contract, not configurable serializers.
+**Interfaces:** Implement C1-C9/C11, not configurable serializers.
 TypeScript exports deriveSetupKey, deriveAdminKey,
 deriveInviteSecret, derivePhoneKey, claimProof, joinProof, authClientProof,
 authGateProof, deriveSessionKeys, commandTag, replyTag, enrollmentReceipt,
-encodeInvitation, decodeInvitation, legacyResponse. Each consumes the frozen
+encodeInvitation, decodeInvitation, legacyResponse, deriveGateHint.
+deriveGateHint returns the eight uppercase ASCII hint bytes specified by C11.
+GateDiscovery.buildAdvertising(G, asciiPrefix) produces bounded primary and
+scan-response byte arrays per C11, or a configuration error. Each consumes the frozen
 typed transcript/input and returns bytes or a structured validation error.
 C++ equivalents use fixed-size arrays and explicit success/failure, never
 zero-filled substitute keys. The spec is authoritative over either implementation.
@@ -175,7 +192,12 @@ zero-filled substitute keys. The spec is authoritative over either implementatio
 - [ ] Run node --experimental-strip-types --test tools/gate_crypto.test.ts tools/gate_protocol.test.ts
   on Node 22.22.1, and pio test -e native -f test_crypto. Expect every named fixture to pass;
   build pio run -e esp32-usb-c-38pin to exercise the ESP32 provider.
-- [ ] Record provider/runtime versions and commit only synthetic fixtures/code.
+- [ ] Write advertising_budget fixtures: primary exactly 31 bytes with service
+  UUID present, default scan response 22 bytes, longest allowed prefix 31,
+  invalid prefix rejected, matching leading hints in short/complete names.
+  Test collision/spoof semantics as routing-only, never authentication.
+- [ ] Run pio test -e native -f test_discovery. Record provider/runtime versions
+  and commit only synthetic fixtures/code.
 
 Exit: independently checked vectors cover new protocol plus unchanged legacy;
 no prior vector is silently reused for a newly bound transcript.
@@ -256,9 +278,15 @@ No callback decides authorization by reading the status string.
   authenticate old admin, claim a replacement, then reject old-session envelopes
   and queued work. Revoked/changed credentials and disabled legacy cannot borrow
   an otherwise unexpired session. Document legacy's remaining integrity risk.
-- [ ] Test connection_deadlines: repeated reads cannot extend the 15-second
-  unauthenticated deadline or 60-second hard cap; failure backoff survives
-  reconnect within one boot. Confirm session expiry at 30 seconds.
+- [ ] Test connection_deadlines: reads cannot extend the 15-second unauthenticated
+  deadline or 60-second hard cap; confirm session expiry at 30 seconds.
+- [ ] Test failed_peer_isolation: A sends a bad/unknown AUTH2 and disconnects;
+  B's valid AUTH2/CLAIM/JOIN can succeed immediately with no timed penalty.
+  A's claimed phone ID must never affect another connection. Three cumulative
+  V2 rejections disconnect only A; success does not reset its failure counter.
+- [ ] Test candidate_probe_no_lockout: unknown candidate AUTH2 followed by
+  another saved candidate or explicit valid JOIN has no 15-second delay.
+  Legacy lockout remains local and cannot delay a subsequent V2 connection.
 - [ ] Implement C1-C6 using Task 1 crypto and
   explicit role state; bound work and caches. Authentication failure clears
   privilege; unauthenticated status remains advisory.
@@ -322,6 +350,10 @@ snapshot for a request; asynchronous PENDING cannot expose a previous OK.
   existing SPIFFS user data; a mismatch blocks upload. Provisioning disables
   relay commands, initializes only empty state, and is replaced by Installed
   firmware before use.
+- [ ] Integrate C11 custom primary/scan-response advertising using Task 1's
+  bounded payloads; do not append automatic fields. Check builder payloads and
+  actual emitted bytes because the installed library silently drops excess AD.
+  Keep old-app UUID filtering and document the hint-prefixed device name.
 - [ ] Integrate onConnect/onDisconnect/activity deadlines and synchronized
   read replies. Remove raw command/proof logging. Time KDF without printing
   inputs; do not lower rounds automatically if slow.
@@ -329,7 +361,9 @@ snapshot for a request; asynchronous PENDING cannot expose a previous OK.
   pulsing. If existing rollover or integration behavior prevents the acceptance
   target, surface a specific supporting fix and revise scope before changing it.
 - [ ] Run all native tests and pio run -e esp32-usb-c-38pin; review the actual
-  hardware-control diff. Builds are necessary but do not establish timing.
+  hardware-control diff and measured firmware/RAM footprint. Instrument R8's
+  heap/largest-block/stack/queue metrics and reset reasons with synthetic test
+  inputs. Builds alone do not establish resource margin or timing.
 - [ ] Update runtime docs with implemented behavior, new config, migration,
   compatibility limits and unperformed checks; commit.
 
@@ -356,14 +390,40 @@ owner-controlled test phones with synthetic bench credentials.
 - [ ] Implement only claim, invite export/import, join, mutual auth, PED,
   revoke and legacy-toggle diagnostic flows. Gate admin mutation/export with
   OS authentication per D8; do not store setup secrets in builds.
-- [ ] Test the maximum messages at minimum supported payload, normal negotiated
-  MTU, reply correlation, background/disconnect and reconnect on actual Android
-  and iPhone. Exercise interrupted CLAIM/JOIN before and after device persistence.
+- [ ] Test maximum messages at minimum supported payload and normal negotiated
+  MTU (frames remain <=20 bytes), reply correlation and reconnect on real
+  Android/iPhone. Exercise interrupted CLAIM/JOIN before/after persistence.
+- [ ] Test one_tap_transaction for tenant and admin: connect/authenticate/PED/
+  verified reply/disconnect, repeated taps suppressed, firmware releases relay
+  independently after disconnect. Deadline/cancel sends no new trigger and
+  inflight ambiguity shows unknown; no later automatic retry.
+- [ ] Test input_then_os_auth_then_connect: setup typing, Face ID/Touch ID/PIN,
+  prompt cancellation and scene transitions occur before BLE work. Wait for
+  active foreground after OS auth; background mid-action clears pending work.
+- [ ] Test nearby_gate_selection with two identities, collisions/spoofed hints,
+  absent scan response and stale locator: at most three candidates within the
+  action deadline, wrong G disconnected, no PED before valid pinned-gate proof.
+- [ ] Test explicit_recovery_paths: replace pending attempt at candidate cap,
+  same-gate replacement, different-gate cancellation/confirmed switch, new phone,
+  and owner recovery. A failed radio response cannot delete keys. Explicit
+  discard explains that gate entries remain and may need owner revocation.
+- [ ] Measure 100 tap-to-GPIO transactions per platform under R8's stated
+  baseline conditions. Record all stages and p50/p95/max; initial target p95
+  <=3 seconds is provisional. Record cold start, weak signal and competing
+  clients separately. Verify the full 16-row list continues across bounded
+  sessions with matching boot/revision/total, and cached actions remain selectable
+  while requiring online revalidation. If fixed framing is too slow, stop and
+  propose a bounded optimization before changing the protocol or targets.
 - [ ] Test replay/tamper without a real gate attached, uncertain-PED no retry,
   secure-storage failure, restore exclusion and invalidation/reinstall recovery.
   Authentication failures must retain recoverable candidate/previous keys.
 - [ ] Run Android permission tests and assembleDebug; run the iOS simulator
   build plus new app vector tests. Then record real-device BLE results separately.
+- [ ] Before any tenant pilot, complete the distribution record required by
+  R7: confirm actual iOS/Android route/accounts, expiry/renewal owner, install
+  and update with credentials retained, and fallback access. TestFlight/signed
+  APK are suggested pilot defaults, not already-provisioned services. Owner
+  bench probes may use existing development installs; they are not tenant rollout.
 - [ ] Record phone/OS/framework/firmware versions and evidence in
   docs/architecture.md. Commit the minimal probes and documentation.
 
@@ -402,7 +462,7 @@ and NO connection from relay contacts to the live D5-Evo.
 | Inject NVS open/read/write failures and truncated/corrupt state | Installed mode refuses electronic access; no reset to legacy/no-auth |
 | Cut power during REVOKE and LEGACY 0, before/after acknowledgment | Acknowledged policy survives; uncertain operation reconciles or enters recovery |
 | Replay/modify frames, requests and replies | No unintended pulse/mutation; no client credential deletion |
-| Read flood without auth and repeated reconnect | Deadlines/backoff enforced; no indefinite single-connection ownership |
+| Read flood without auth and repeated reconnect | Per-connection caps enforced; one peer cannot leave a timed penalty for another |
 | Storage/crypto/fragment load at pulse boundaries | GPIO within proposed bound; no double pulse; contacts open at idle |
 | Reboot, watchdog reset, supply dip, power restoration | No unintended closure/retrigger; waiting invitations canceled |
 | Fresh provisioning then installed build; erase installed NVS | Expected initial policy; erased installed state stays locked |
@@ -411,12 +471,42 @@ and NO connection from relay contacts to the live D5-Evo.
 | Mobile background/permission revocation/secure storage failure | Safe disconnect/retry state, no stale queued action |
 | Protocol clock beyond 49.7 days (injected clock) | Invitations/session/connection deadlines behave correctly |
 
+
+### Required hardware stress record (all rows NOT RUN until measured)
+
+Use the existing supported assembly with relay contacts disconnected from the
+gate. Record firmware commit, board/module identity, power setup/5 V rail,
+phone/OS, MTU, signal/orientation, measurement method and repetitions. Use
+synthetic credentials and operator-controlled safe power interruption; no live
+gate or speculative voltage settings. Do not substitute a different ESP32,
+PSRAM board, larger MTU or software relay stub for the release measurement.
+
+| Run | Minimum workload | Required evidence / stop condition |
+| --- | --- | --- |
+| Preflight | Inspect actual 4 MB layout, flash/image footprint, 24-handle discovery and 16-entry capacity | Matches C8; no user filesystem data overwritten; old app still discovers the UUID |
+| Advertisement boundary | Default and maximum 20-byte prefix, two nearby identities, absent scan response, copied/colliding hints | Capture 31-byte primary and <=31-byte scan response on air; no omitted UUID or authentication by hint |
+| Normal use | 100 tap-to-GPIO opens per phone platform at default MTU, cooldown respected | Stage times/p50/p95/max; provisional p95 <=3 s under R8 baseline conditions; 10 s deadline respected |
+| Full inventory | 16 maximum-name joined/waiting rows, then expiry/revoke while loading | All rows reachable with Continue loading; no mixed revisions, disabled-forever actions or connection held while reading |
+| Handoff/abuse | 100 bad/unknown-peer -> good-peer cycles; malformed/maximum frames at sustainable sender rate; two competing clients | Record frame rate; no cross-peer 15 s lockout, unauthorized mutation or unbounded queue; honest bounded failure under active contention |
+| Resource cycling | 100 warm-up then 1000 auth/read/disconnect cycles; sample every 100 at identical quiescent state | >=32 KiB free heap, >=8 KiB largest block, >=512 unused stack bytes per owned task; no downward trend, final heap within 1024 bytes of baseline |
+| Combined pulse stress | 100 additional measured pulses under crypto/radio/NVS pressure near both edges, cooldown respected | GPIO/contact traces, 5 V stability, D9 timing targets evaluated; no repeated/unexpected pulse or NVS write during energized interval |
+| Endurance | 8-hour auth/read/advertise soak | No reset/watchdog/allocation failure/stuck connection/unbounded growth; periodic resource and connection records, no unexplained dropped commands |
+| Persistence faults | Power cut before/during/after each CLAIM/JOIN/REVOKE/LEGACY commit/receipt; NVS-full/read/write injection | Acknowledged state survives; uncertain states recover only as specified; no permissive default or repeated actuation |
+| Lifecycle/recovery | OS auth success/cancel, background, permissions revoked, reinstall/restore, candidate cap and replacement phone | No connection held for forms/prompts, no automatic key deletion or PED retry; documented recovery reaches a usable state |
+
+Resource and latency guardrails are provisional engineering targets, not claimed
+measurements. Any unmet target blocks rollout until its cause, device evidence
+and revised solution/target are reviewed; never silently relax authentication,
+memory limits, cooldown or D9. A shorter pulse under reset is not judged against
+the normal minimum. Native fault tests and physical power cuts are reported
+separately. A missing device/instrument or unavailable run remains NOT RUN.
+
 ## Task 8: Documentation handoff and full app plans
 
 **Files:** docs/architecture.md, root/app README.md/AGENTS.md/CLAUDE.md as
 applicable; future iOS and Android plans under docs/superpowers/plans/.
 
-- [ ] Audit implementation and tests against R1-R7, C1-C10 and accepted D1-D9. Record
+- [ ] Audit implementation and tests against R1-R8, C1-C11 and the corrected D7. Record
   any incomplete requirements instead of declaring completion from green builds.
 - [ ] Document exact provisioning -> installed workflow, backup/recovery,
   legacy cutover/re-enable warning, upgrade/schema compatibility, no rollback
@@ -424,20 +514,46 @@ applicable; future iOS and Android plans under docs/superpowers/plans/.
 - [ ] Write separate full app plans covering R7 screens, QR scanning permissions,
   device-only storage, OS-authenticated admin actions, offline state, honest
   failure/trigger copy and migration. Use the proven contract and fixtures.
-- [ ] Require a supported app installation/signing route before everyday use.
-  Store publishing and additional features remain separate work.
+- [ ] Verify the R7 pilot distribution gate was completed before tenant testing;
+  choose stable distribution before everyday reliance. Add invitation default
+  10 minutes, restart/copy/identity warnings, and advance cutover notice to the
+  full app plans. Store publishing and additional features remain separate work.
 - [ ] Record which hardware checks were actually performed. A later supervised
   live-gate test requires explicit installation authorization and completed bench
   checks; this plan does not authorize operating the gate.
 - [ ] Commit the handoff documentation and present remaining decisions to owner.
+
+
+## PR-comment resolution map
+
+| Review point | Resolution / verification owner |
+| --- | --- |
+| 1 Global lockout | C5/R5 connection-local V2 rejection counting; Task 3 isolation and Task 7 handoff tests |
+| 2 Two-tap/held connection | R7 one-tap transaction/release; Task 6 lifecycle and timeout tests |
+| 3 OS authentication/setup typing | R7/C9 input -> OS auth -> active foreground -> connect; Task 6 real iPhone check |
+| 4 Installation | R7 distribution gate before tenant pilot, with concrete recommended routes and renewal owner; Task 6/8 |
+| 5 Nearby gates | C11 hardware-sized hint, locator fallback and full-G proof; Tasks 1/5/6/7 |
+| 6 Admin PED | Existing C4 admin-or-tenant rule retained and R7 made explicit; Task 4/6 |
+| 7 Recovery dead ends | R7 explicit candidate discard/replace/switch/new-phone/cutover flows; Task 6/8 |
+| 8 Screen definitions | R7 is canonical screen/state/action table; full app plans consume it in Task 8 |
+| 9 Invitations | 10-minute default, restart/copy/identity warnings; no ECDH redesign under accepted V1 boundary |
+| 10 Capacity/latency/KDF | 24 handles retained; R8 counts/targets and hardware matrix added; fixed framing and PBKDF2 retained pending evidence/separate review |
+
+These are documentation fixes. No runtime behavior, package, flash image or
+hardware setting is changed by this revision.
 
 ## Current review status
 
 - Task 0 documents finalized; no firmware/app implementation or bench test run.
 - D1-D9 accepted; D9 numeric tolerances remain provisional until tested and
   confirmed by the owner. Readable labels/activity are accepted for V1.
-- C1-C9 define the contract; C10 provides synthetic examples checked through
+- C1-C9/C11 define the contract (C5 corrects cross-client backoff); C10 examples
+  remain unchanged and were checked through
   Node/OpenSSL CLI paths, not independent platform or hardware certification.
 - Tasks 1-8 remain unchecked and require separate implementation authorization.
 - No fresh decision about framing, crypto concatenation, error schemas,
   provisioning or storage is delegated to individual implementers.
+- All R8 physical stress/latency/resource results remain NOT RUN. The actual
+  supported hardware, not a simulator or assumed larger MTU, must pass them.
+- HKDF/ECDH and faster framing are not silently included; any such change needs
+  separate contract review and conformance/regression checks.

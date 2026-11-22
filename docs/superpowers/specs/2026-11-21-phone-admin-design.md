@@ -5,7 +5,9 @@ Created: 2026-11-21
 Revised: 2026-11-22
 
 On 2026-11-22 the owner accepted D1-D9, including readable labels/activity for
-V1, with D9's numeric timing tolerance provisional until tested. C1-C9 below
+V1, with D9's numeric timing tolerance provisional until tested. The subsequent
+PR-comment fixes retain those boundaries and replace cross-client V2 backoff
+with connection-local abuse limits; hardware stress evidence is required. C1-C9/C11
 freeze the resulting protocol. Finalizing these documents does not authorize
 implementation, firmware flashing or gate operation. This revision replaces the
 earlier protocol proposal, rather than adding optional rules alongside it.
@@ -47,11 +49,11 @@ limits. Alternatives below record tradeoffs, not unresolved decisions.
 | D4 | Generate a unique 128-bit random setup secret and gate ID at provisioning; store the recovery material in the owner's password manager. Use a fixed, versioned setup KDF. | Longer recovery code. Human-chosen passwords would need a different reviewed strength policy. |
 | D5 | Require explicit physical provisioning/migration mode for an empty store; installed storage errors lock out electronic commands. | An erased store needs local recovery. There is no automatic fallback to the shared passphrase or bench mode. |
 | D6 | Use bounded application framing that works with 20-byte BLE write payloads, rather than relying on long-write support or an increased MTU. | More protocol work; avoids platform-dependent long-write assumptions. Validate on both real phone platforms early. |
-| D7 | Disconnect after 15 seconds without authentication regardless of reads; maximum connection tenure 60 seconds; new authenticated sessions last 30 seconds. | Very slow enrollment may need a reconnect. Radio jamming and repeated reconnection cannot be eliminated. |
+| D7 | Keep 15/30/60-second unauthenticated/session/connection limits. V2 failures are counted only on the offending connection; no gate-wide or victim-ID lockout. Legacy 15-second backoff stays local to its connection and cannot block V2. | Revised after PR review to prevent cross-client denial windows. Connection storms/radio jamming remain possible. |
 | D8 | Require OS user authentication for admin mutations and revealing/sharing invitations; no extra biometric prompt for each pedestrian trigger in V1. | More owner friction; an unlocked tenant phone remains an access credential. |
 | D9 | Defer/reject flash mutations while the relay is active. Proposed bench target: GPIO active for 500 ms +/-20 ms under supported powered operation, with no unexpected contact closure. | This is a release acceptance target to measure, not a proven hardware bound. Failure blocks live use and requires a reviewed timing solution. |
 
-The exact byte-level contract is C1-C9. D9's numeric validation and production
+The byte-level contract is C1-C9 with the C5 abuse-limit correction and C11 discovery contract. D9's numeric validation and production
 verification remain implementation/release gates. Approval or merge of this
 document alone is not an instruction to execute.
 
@@ -104,6 +106,9 @@ Residual risks accepted for the scoped V1 under D1:
   need a separate provisioning/recovery decision; this spec does not enable them.
 - Protocol limits reduce easy connection monopolization; they do not guarantee
   availability against an active radio attacker. Keep existing access methods.
+- Optional HKDF/ECDH suggestions are not included in this correction. Suite 1
+  remains PBKDF2 with a random setup secret; no-forward-secrecy remains an
+  accepted V1 boundary. Neither change is needed to resolve the reviewed gaps.
 
 ## R1: Versioned identity and keys
 
@@ -327,10 +332,12 @@ actual phones; no reliance on long ATT reads/writes is permitted for version 2.
 
 Keep the existing 60 second idle safeguard, plus D7's 15 second unauthenticated
 deadline and 60 second hard connection cap. Reads do not extend either cap.
-Use a 15 second auth-failure backoff across reconnects during the current boot;
-do not persist every failure to flash. Apply equivalent limits to CLAIM/JOIN.
-Bound parsing/crypto/queue work and terminate abusive connections. Document the
-remaining possibility of denial of service; the lockout is not a password defense.
+V2 AUTH2/CLAIM/JOIN and command-tag failures never impose a gate-wide or
+claimed-phone-ID backoff. Count failures only against the current connection
+and disconnect after three; do not persist them. Preserve the old legacy
+15-second lockout only within a legacy connection, clearing it on disconnect.
+Bound work and terminate abusive connections. C5 defines the exact correction;
+there is still no guarantee against reconnect storms or radio denial of service.
 
 ## R6: Firmware scheduling and physical acceptance
 
@@ -359,49 +366,232 @@ until the owner reviews a revised solution; do not report the target as proven.
 This is not a safety certification or a promise that software prevents every
 hardware fault. Leave the D5-Evo's existing safety wiring untouched.
 
-## R7: App behavior and migration
+## R7: App journeys, screens and migration
 
-Preserve the agreed screens: Join a gate (scan/paste and owner entry), tenant
-home (Gate/Lock/Link and Pedestrian), Owner setup, admin home with Phones,
-Joined/Waiting/Old app versions list, Add phone, Code/share/cancel and Remove
-confirmation. iOS uses pushed screens/sheets and swipe removal; Android uses
-screens and row menus. Admin row is drawn separately, not removable. Offline
-lists are visibly stale/read-only. Reconnect and authenticate before any mutation.
+A user action owns a short connection, not a screen. Collect input/confirmation,
+finish OS authentication and wait for an active foreground scene before
+connecting. This includes owner setup code, phone name/lifetime and removal or
+legacy-change confirmation. Do not connect while the user is typing or while an
+OS prompt is displayed. Cancellation sends no command. If the app backgrounds,
+cancel queued work and disconnect; never resume a pending PED automatically.
 
-Replace definitive "This phone was removed" with "Access could not be verified.
-Retry near your gate or ask the owner." Keep credentials until explicit removal
-or replacement. No access/error screen may silently start reenrollment.
-Claim confirmation warns that waiting invitations will be canceled and existing
-admin access replaced. Show pending invitations as canceled after restart.
+For an enrolled tenant OR admin, one Pedestrian tap does:
+scan/select the expected gate (C11), connect, DISCOVER, mutually authenticate,
+send one PED, verify/report its reply, then disconnect. Admin needs no separate
+tenant enrollment. Disable repeated taps while an operation is active. Start a
+10000 ms foreground operation deadline at the tap (at first BLE work for admin
+actions, after forms/OS authentication). This is a timeout, not a measured speed
+promise. At timeout cancel unsent work and disconnect. If any PED frame may have
+been delivered, report "Trigger outcome unknown; check the gate" and never
+automatically send another. A command already accepted cannot be undone.
+
+Disconnect immediately after the terminal reply is verified/copied locally,
+including after fetching an administrative list; do not wait for the pulse or
+cooldown to finish. Firmware owns relay release after disconnect. On terminal
+error/cancellation/timeout, disconnect too. UI feedback and cached lists remain
+visible without a BLE connection. Complete each admin mutation in its own
+connection; reopening an invitation is a fresh authenticated LIST fetch, then
+disconnect before displaying it. These client rules complement, not replace,
+the firmware's 15/30/60 second limits.
+
+A full list may exceed one transaction. Preserve only fully verified rows and
+the next index with their authenticated bootId/listRevision; discard incomplete
+row bytes on disconnect. Show "Incomplete - X of Y loaded" and Continue loading.
+Continue opens a fresh bounded connection, authenticates and reads STATE: if
+bootId/listRevision/total still match, resume at the next index; otherwise clear
+the partial inventory and start at index zero with "List changed; refreshing".
+Never combine different revisions or silently mark an incomplete list complete.
+At each deadline disconnect; continuation is an explicit user action, not an
+unbounded reconnect loop. A full 16-row maximum-name list is a required test.
+
+Cached rows cannot be edited authoritatively on the phone. Add/Remove/Cancel/
+Legacy intents remain selectable while disconnected; they reconnect and verify
+current state before committing. When a target's cached revision no longer
+matches, refetch/reconfirm its ID/details before removal/cancel rather than
+trust a stale row/index. Disconnect before requesting renewed user confirmation;
+the confirmed action reconnects/revalidates again. If revalidation cannot finish, leave the action pending
+for a deliberate retry without sending a mutation.
+
+The following is the canonical screen contract. No ignored mockup or earlier
+commit is needed to implement it. On iOS use pushed lists/sheets and swipe
+removal; on Android use screens and row menus. Content, enabled actions and
+failure behavior are identical.
+
+| Screen/state | Visible content and actions | Busy, success and recovery behavior |
+| --- | --- | --- |
+| First launch | "Join a gate", Scan QR, Paste code; menu "I'm the owner" | Camera permission only when Scan is selected; denial leaves Paste available. Validate code before BLE. |
+| Owner setup | Setup code; expected gate hint from provisioning record; takeover/canceled-invitations warning; "Make this phone the admin" | Select matching hint, if necessary fetch G through a discovery-only connection and disconnect before entering code. Collect code/confirm and finish OS auth while disconnected. Reconnect for CLAIM/candidate AUTH2; no form typing on a held connection. |
+| Enrolled home | Gate nickname/hint; honest Gate/Lock/Link state; Pedestrian button; admin also has Phones | Disconnected is normal. A tap shows Searching / Connecting / Verifying / Sending, then "Trigger accepted" or explicit failure/uncertainty. No "gate opened" claim. |
+| Phones | Admin row (not removable), Joined rows, Waiting rows/time left, old-app/shared-passphrase switch and warning, Add and Refresh | Load using verified STATE/LIST then release BLE. Cached data is marked "Last checked..."; it cannot be committed locally, but action intents remain selectable. Any mutation reconnects/rechecks by ID/current revision. Partial inventory shows Continue loading and is never presented as complete. |
+| Add phone | Name, lifetime 10 minutes / 1 day / 7 days, Create code | Default 10 minutes on every new form. Explain "Works once. Restarting the gate cancels unused codes, even before expiry." Validate UTF-8 size before OS auth/connection. |
+| Invitation | QR, grouped text, Copy/Share, remaining enrollment time, Cancel code | Show only after verified INVITE and disconnect. Require OS auth before later reveal/copy/share; cancellation reconnects. Show "Anyone with this code can join first. Shared copies cannot be recalled." A name is an owner-supplied label, not proof of who redeemed it. |
+| Remove phone/code | Selected name/hint, explicit confirmation and legacy warning when relevant | OS auth while disconnected, then revoke by ID. Show success only after verified durable reply. On unknown result, refresh/reconcile rather than repeat blindly. |
+| Access could not be verified | "Retry near your gate or ask the owner"; Retry, Use new invitation, Manage saved access; owner recovery entry | Retain credentials on denied/unknown/untrusted error. Never label a phone definitively removed based on that error. No auto-reenrollment. |
+| Interrupted setup/join | "Enrollment outcome unknown"; Retry verification, Replace pending attempt, recovery guidance | Retry saved candidate AUTH2 first. At the two-candidate cap, do not silently evict. Explicit discard workflow below releases a slot. |
+| Gate unavailable / unsupported / storage recovery | Separate messages for not found/busy, firmware update required, and controller recovery required | Retry is deliberate; no legacy/no-auth fallback. A protocol fault never exposes Remove/Reset as an automatic action. |
+
+Recovery workflows are required, not optional UI polish:
+
+- Same-gate replacement code: keep the confirmed key until new candidate AUTH2
+  succeeds. Warn that the previous gate entry remains active until the owner
+  revokes it. An unknown candidate can be discarded only after explicit choice.
+- Candidate cap: show each pending attempt's gate/role/time (never its key).
+  "Discard pending attempt" explains that it only removes this phone's recovery
+  material and does not revoke a possibly committed gate credential. Require
+  confirmation; for admin candidates also OS auth and confirmation that the
+  setup recovery code is available. Keep the confirmed credential and any other
+  candidate. Then permit a fresh invitation or explicit fresh CLAIM. No radio
+  error can trigger this workflow or delete a candidate.
+- Different-gate invitation: stop before BLE and show "Replace saved gate?"
+  with old/new public hints. Cancel preserves everything. Explicit confirmation
+  deletes old local credentials/candidates only after warning that the old
+  gate's permissions remain; ask that owner to revoke them. Then join the new
+  gate. This keeps one configured gate per install and is not multi-gate support.
+- New/replaced phone: device-only keys do not transfer. A tenant needs a fresh
+  invitation and the owner revokes the lost/old phone's ID. Owner replacement
+  uses the recovery code; losing both phone and recovery code requires local
+  controller recovery. Do not imply an app reinstall always deletes Keychain.
+- Routine admin takeover does not require a second tenant enrollment. The note
+  about independent tenant credentials covers separate/previously issued access;
+  the V1 UI offers no multiple-role account switcher.
+- Legacy cutover: require owner confirmation that every tenant has installed and
+  tested the new app and has been told when old access will stop. Old builds may
+  display a misleading wrong-passphrase message; tell users that retrying the old
+  app will not fix cutover. Never silently disable the shared passphrase.
 
 While legacy is on, removal confirmation says: "Remove this phone credential?
 Anyone who still has the shared passphrase can continue using an old app until
-shared access is turned off." Show the same warning in Phones. After legacy is
-off, confirm that future authenticated requests from the removed credential are
-rejected; revocation cannot undo a pulse already accepted. Signed success follows
-durable removal. Reenabling legacy requires explicit confirmation of restored old
-access and OS user authentication under D8.
+shared access is turned off." Reenabling legacy requires explicit confirmation
+of restored old access and OS authentication. Revocation cannot undo a pulse
+already accepted. A verified reply means the controller accepted the pulse,
+not a gate-position observation.
 
-iOS credentials use Keychain device-only, non-synced storage; Android uses
-Keystore-protected storage excluded from backup/device transfer. Test reinstall,
-restore and key invalidation; do not assume uninstall erases every Keychain item.
-Require OS authentication for admin mutations and invitation disclosure (D8).
-No secret in clipboard without an explicit copy/share action, logs, analytics,
-screenshots in test evidence, build config or crash reports. Warn that recipients
-of a shared invitation can enroll and that shared copies cannot be recalled.
+iOS credentials use Keychain device-only/non-synced storage; Android uses
+Keystore-protected storage excluded from backup/device transfer. Test restore,
+key invalidation and reinstall. No secret in build config, logs, analytics or
+crash reports. Copy/Share is explicit; do not promise deletion of chat history or
+recall of a copied invitation. Warn that retained code plus recorded enrollment
+can expose the derived phone key under the accepted no-forward-secrecy design.
 
-Migration: back up recovery material, bench-verify new firmware, provision the
-existing passphrase plus setup secret and gate ID, verify installed-mode reboot,
-claim admin, enroll tenants, test each phone, then explicitly disable legacy.
-The new app must report unsupported firmware without downgrade. Missing setup,
-store faults and expired invitations get distinct guidance. Store publishing,
-signing/renewal arrangements and a supported installation route must be decided
-before depending on new apps for everyday access.
+### Distribution gate (before any tenant pilot)
+
+Choose and record the installation/update route and responsible maintainer
+before creating tenant invitations or disabling legacy. This is an operational
+dependency, not permission to publish or enroll accounts in this PR.
+
+Recommended pilot defaults: iOS TestFlight with the owner responsible for
+shipping a replacement build by day 60 and notifying testers before its 90-day
+expiry; Android a signed release APK delivered privately by the owner, retaining
+the same signing identity for updates. Confirm account eligibility, install and
+update-with-credentials-retained on each participating phone. If either route
+is unavailable, no tenant pilot starts until a supported alternative is chosen.
+These are recommended deployment defaults, not a claim that accounts/builds
+already exist. Do not use an expiring beta as the only everyday access method.
+
+Record pilot owner/contact, participants/platforms, distribution links, signing
+custodian (not keys), build expiry/renewal dates, update instructions and existing
+fallback entry method in the future operational handoff. Stable everyday
+distribution must be decided before general reliance; store publishing remains
+a separate project. Never request tenant setup secrets during installation.
+
+Migration remains: bench verification, explicit provisioning then Installed
+build, old-app compatibility check, admin claim, tenant installation/enrollment,
+each tenant's successful test, advance notice, then deliberate legacy cutover.
+No firmware/app release is ready until R8's hardware gates pass.
+
+## R8: Hardware boundary, responsiveness and stress evidence
+
+The supported device remains the existing 38-pin ESP32/5V relay/LM2596 assembly,
+4 MB esp32dev profile, one BLE connection, 16 joined-plus-waiting slots and
+24 reserved GATT handles. No PSRAM, newer radio, extended advertising, spare
+CPU throughput, new relay board or position sensor is assumed. Do not increase
+timeouts/buffers, reduce authentication or change cooldown to hide failures.
+
+Resource envelopes to validate on that device:
+- Legacy advertising and scan response each <=31 bytes (C11).
+- V2 ATT payload <=20 bytes regardless of MTU; 512-byte assembly, 57 fragments
+  maximum, one outstanding operation. Four logical-message buffers at most
+  (assembly, queued request, last request and immutable reply): 2048 payload
+  bytes total; representation/stack overhead must also be measured.
+- At most two serialized snapshot buffers of 1114 bytes each plus bounded
+  16-entry credential/invitation structures. No growing history/log/queue in RAM.
+- Record free/minimum heap, largest free block, task-stack high-water marks,
+  boot/KDF time, callback/protocol/NVS duration, negotiated MTU, firmware size
+  and reset reason. The Bluetooth stack and allocators count against the budget.
+- Initial bench resource guardrails: >=32 KiB free heap, >=8 KiB largest free
+  block, and >=512 bytes unused stack on each application-owned task at peak
+  tested load. Measure internal 8-bit-capable RAM using heap_caps_get_free_size
+  and heap_caps_get_largest_free_block with MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT.
+  The inspected SDK documents uxTaskGetStackHighWaterMark in bytes (its Xtensa
+  StackType_t is uint8_t); do not multiply that reading by four. These are
+  reviewable engineering targets, not measured capacities or permission to
+  ignore allocation failures.
+  Any failure stops release pending evidence and an explicit plan revision.
+
+Keep the fixed framing until the existing hardware has been measured. A direct
+DISCOVER -> AUTH2 -> PED exchange uses 13 + 29 + 36 = 78 GATT operations with
+SELECT/read for every response page; about 52 occur before pulse acceptance.
+Counts exclude connection/service discovery/pending polls and are not latency
+measurements. Merely requesting a larger MTU cannot change this fixed contract.
+A full 16-row maximum-name LIST can require 984 GATT operations, so R7's
+continuation path is mandatory rather than assuming it fits one 10-second
+transaction. Record each stage; if it is too slow, propose a bounded transport optimization
+with minimum-MTU fallback and revised tests before changing C6. Do not invent
+a faster radio or silently fragment differently.
+
+Provisional user-experience target: p95 tap-to-GPIO-activation <=3 seconds with
+the app already foreground, Bluetooth/permissions ready, known expected gate,
+no cooldown/competing connection and good reception; operation timeout is
+10000 ms. Record actual range, orientation and RSSI rather than claiming a
+universal distance. Measure cold start, weak reception and contention separately.
+In impaired conditions a bounded failure is acceptable; the client must not
+submit a new/retried pulse after canceled/expired user intent. A command already
+in flight can have an unknown outcome and cannot be recalled. The exact device measurements
+decide whether the provisional target needs a reviewed adjustment or whether
+transport needs redesign. These targets do not relax D9 relay timing.
+
+A disconnected bench release gate must include:
+- At least 100 measured opening transactions per real phone platform at default
+  MTU, plus 100 combined stress pulses with relay timing recorded. Respect the
+  existing cooldown on every legitimate pulse.
+- 1000 authenticate/read/disconnect cycles after a 100-cycle warm-up, and an
+  8-hour auth/read/advertise soak with no unbounded memory trend, unexpected
+  resets, stuck connections or unexpected relay transitions.
+- 16 occupied slots, maximum names/messages, ID collision injection, fragment
+  timeout/duplicates/invalid lengths, malformed traffic at the sender's maximum
+  sustainable rate, disconnect storms and 100 bad-peer -> good-peer handoffs.
+  Stop hostile traffic for the handoff measurement; no radio-jamming immunity
+  is claimed. No 15-second cross-peer lockout may remain.
+- Two clients contending and two advertised gate identities (a second physical
+  peripheral or phone emulator is sufficient for the neighbour). Test wrong
+  hints/collisions/spoofed names, stale locators and missing scan responses.
+  No PED may be sent before successful authentication of the pinned G.
+- Controlled bench power cuts at each persistent commit boundary, low/sagging
+  supply and reset recovery, plus NVS-full/read/write-failure injection. Record
+  actual voltage/setup and relay contact/GPIO traces; use operator-controlled
+  safe supply limits, never guess a damaging voltage or involve the live gate.
+- Combined flash/crypto/radio load near pulse edges. Record 5 V rail stability
+  with the relay switching. Keep existing power/safety wiring requirements.
+
+After warm-up, compare quiescent heap samples at the same state every 100 cycles:
+no continuing downward trend, and final free heap within 1024 bytes of the
+post-warm-up baseline after caches settle. An unexplained deviation is a failure,
+not a reason to reset the baseline mid-run. Capture baseline/minimum/largest
+block/stack metrics even when all calls return success. Record any reset, failed
+allocation or watchdog event; each blocks release until explained and fixed.
+
+Every evidence row needs firmware commit, exact board/module/config, phone/OS,
+measurement method, conditions, repetitions, min/p50/p95/max or fault result,
+and pass/fail/not-run. Hardware-in-loop injection and native fakes are distinct
+evidence. No simulation, build or arithmetic check substitutes for this gate.
+Until measured, all hardware stress results are NOT RUN; D9 numeric tolerances
+and the new resource/latency targets remain provisional.
 
 
 ## C1: Frozen binary contract (wire version 2, suite 1)
 
-C1-C9 are normative. Multibyte integers are unsigned big-endian, with no padding
+C1-C9 and C11 are normative; C5 reflects the PR-review abuse-limit correction.
+Multibyte integers are unsigned big-endian, with no padding
 or native-struct serialization. B[n] means exactly n raw bytes; U8/U16/U32/U64
 mean 1/2/4/8 bytes. Concatenation is written ||. SHA means SHA-256 returning
 32 raw bytes. Hex in this document is display notation, not bytes to hash.
@@ -486,9 +676,9 @@ JOIN proof = M(inviteSecret, "JOIN", Q).
 candidatePhoneKey = M(inviteSecret, "PHONEKEY", Q).
 
 CLAIM/JOIN validate G and the challenge that was current immediately before
-dispatch. Every syntactically valid attempt rotates C, including stale/locked
-attempts. Bad proof starts backoff and ends existing privileges; no state is
-changed. Known-valid proof with a failed/uncertain store operation does not
+dispatch. Every syntactically valid attempt rotates C, including stale/rejected
+attempts. Bad proof counts against this connection and ends existing privileges;
+no enrollment state is changed. Known-valid proof with a failed/uncertain store operation does not
 consume an invitation or confirm an enrollment. A committed mutation can exist
 without the client having received a success receipt.
 
@@ -513,7 +703,8 @@ DISCOVER reply is:
 H(type=81) || U8(OK) || U8(suite=1) || G || C ||
 U8(health) || U8(setupConfigured) || U8(legacyAccepted) || U32(retryAfterMs).
 Total 47 bytes. Health: 0 ready, 1 recovery-required, 2 bench, 3 provisioning.
-Booleans are exactly 0 or 1; retry is remaining backoff, saturated to U32.
+Booleans are exactly 0 or 1. V2 retryAfterMs is always zero; no cross-client
+backoff is advertised or enforced.
 Recovery replies may use all-zero C if RNG initialization failed, but must not
 accept any authentication/physical command. DISCOVER does not rotate C.
 All discovery fields are hints. The app never trusts a claimed legacy/bench
@@ -541,7 +732,8 @@ The gate verifies the client before creating a session. The phone verifies the
 gate before sending COMMAND. No separate unauthenticated authorized notification
 can substitute for that proof. Every well-formed AUTH2 attempt clears prior
 session state and consumes C; a successful fresh auth resets sequence to 1.
-A failed proof or unknown credential ends privileges and starts backoff.
+A failed proof or unknown credential ends privileges and increments only this
+connection's failure counter; it cannot penalize a later connection or phone ID.
 No-session/status/error strings cannot cause key deletion.
 
 COMMAND tag = M(Kc, "COMMAND", Q). Verify the envelope, current session,
@@ -571,7 +763,7 @@ serve a stale success as current authorization.
 A valid MAC with a sequence gap, older sequence or sequence exhaustion produces
 untrusted E0/REPLAY, without advancing counters or repeating effects, and ends
 the session. Reused logical request IDs with changed bytes have the same result.
-They do not start authentication backoff, but count toward the three-error abuse
+They count toward the connection-local three-error abuse
 limit. Reauthenticate and reconcile state; never automatically retry PED.
 An exact cached duplicate at the final sequence 0xFFFFFFFF is still retrievable
 until expiry; a new COMMAND thereafter requires a fresh AUTH2 session.
@@ -638,8 +830,10 @@ validation or role checks; no untrusted request may exercise storage or relay.
 
 Pre-session failures or unverified/missing/expired-session envelopes use:
 H(type=E0) || U8(code) || U32(retryAfterMs), total 11 bytes, no MAC.
-retryAfterMs is nonzero only for LOCKED_OUT. These are hints, not proof of
-revocation or state. Never attach a secret, echo received payloads, or return
+retryAfterMs is always zero in V2. Code 3 LOCKED_OUT is reserved and never
+emitted by V2 in this revision; legacy uses its existing status behavior.
+These are hints, not proof of revocation or state. Never attach a secret,
+echo received payloads, or return
 names/counts in these errors. Unknown request types use UNSUPPORTED. Incorrect
 G -> WRONG_GATE; mismatched C -> STALE_CHALLENGE; bad proof -> DENIED.
 JOIN for missing/purged invite -> NOT_FOUND (EXPIRED is reserved; no tombstones).
@@ -652,14 +846,22 @@ STORE_FAILED is permitted only when definitely no persistent write started.
 Recovery has priority over ordinary application work. Read-only discovery
 remains available if BLE/RNG initialization permits it.
 
-Known-bad proof/tag or UNKNOWN_CREDENTIAL starts a global boot-local 15000 ms
-backoff only if none is active. Attempts during backoff get LOCKED_OUT and do
-not extend it; reconnect does not clear it. Syntax, stale challenge, wrong gate
-and transport errors do not extend backoff but count toward abuse limits.
-Unauthenticated DISCOVER remains readable during backoff. Three malformed
-logical/framing errors on one connection cause disconnect; invalid MAC ends
-the session immediately. Authentication attempts consume C even when locked.
-Neither success nor reconnect clears an unexpired backoff.
+V2 uses a saturating failure counter attached only to the BLE connection
+generation, initialized to zero on connect and discarded on disconnect.
+Bad proof/tag, UNKNOWN_CREDENTIAL, syntax/framing errors, stale challenge,
+wrong gate and replay rejection each increment it once per rejected logical
+attempt or aborted assembly. At three failures disconnect; counters never
+follow the claimed ID, MAC address, another connection or reboot. Success
+within the same connection does not erase earlier failures. Invalid proof/MAC
+ends current privileges immediately. A missing candidate can fail AUTH2, then
+another candidate or explicit JOIN can succeed without a 15-second wait.
+
+No V2 failure starts a timed backoff. Existing legacy AUTHRESP keeps its
+15-second connection-local lockout and reconnect-clearing behavior, isolated
+from V2. The connection mode cannot switch in place; a legacy failure cannot
+create a V2 penalty. Deadline, queue and per-connection limits remain. Fast
+reconnection can still contend for the radio; avoid claiming DoS immunity.
+C remains single-use after each well-formed authentication attempt.
 
 ## C6: BLE framing, reads and scheduling
 
@@ -735,7 +937,7 @@ unauthenticated timer starts at connect, pauses only for an active authenticated
 session, and restarts at the instant that session expires/ends; limit 15000 ms.
 Legacy successful AUTHRESP counts as authenticated for this connection timer.
 CLAIM/JOIN success alone does not. Read/write activity may reset the existing
-60000 ms idle timer only. Backoff, fragment timeout and hard cap are independent.
+60000 ms idle timer only. Legacy-only connection backoff, fragment timeout and hard cap are independent.
 At any cap, clear assembly/session/caches, cancel queued work and disconnect.
 Do not terminate an in-flight flash write by pretending it did not happen.
 Clients poll PENDING at most once per 100 ms and stop on timeout/disconnect;
@@ -949,15 +1151,81 @@ and hardware testing remain unperformed. The temporary calculator is not a
 product implementation and is not included in this docs-only PR.
 
 
+
+## C11: Bounded discovery and public gate hint
+
+This extends discovery only; C1-C10 message bytes, KDF and conformance values
+are unchanged. No encryption/ECDH, pairing or manufacturer company ID is added.
+
+hint = uppercase hex of first4(SHA(ASCII("D5EVO2-ADV|") || G)), eight ASCII
+characters. It is public, may collide or be copied, and never authenticates a
+gate. A stable hint makes installations observable; this falls within the
+accepted readable metadata boundary, not a claim of zero privacy impact.
+
+For the existing BLE stack, construct explicit raw legacy payloads:
+- Primary advertisement: Flags AD (3 bytes, value 0x06), complete existing
+  128-bit service UUID AD (18 bytes), shortened local name AD containing hint
+  (10 bytes). Total exactly 31 bytes, with no automatic name/Tx-power extras.
+- Scan response: complete local name AD containing hint || "-" || prefix.
+  prefix is the configured device name restricted to ASCII and truncated to
+  20 bytes, default "D5-EVO-Gate". Maximum 29 name bytes + 2 AD bytes = 31.
+  GAP device name uses this same complete name. The default is 20 name bytes /
+  22 AD bytes. Existing apps may display the hint-prefixed name; service UUID
+  filtering remains unchanged.
+- The shortened name is a prefix of the complete name, so either form exposes
+  the same leading hint. Preserve the UUID in the primary payload for old scans.
+  Invalid/non-ASCII configured prefix is a provisioning/config validation error,
+  not permission to emit an oversized/truncated service UUID.
+
+Static fixture: G=000102030405060708090A0B0C0D0E0F gives hint A2AEADBF.
+Its primary payload is
+0201061107C10C2C9DF795438A004F663FC42E8C4B09084132414541444246 (31 bytes).
+The default complete name A2AEADBF-D5-EVO-Gate produces a 22-byte scan-response
+AD. These sizes/digest and the 78/984 GATT-operation counts were checked with
+a temporary TypeScript calculator; no emitted-radio or device latency claim
+follows from that arithmetic.
+
+Use the pinned stack's custom advertisement and custom scan-response paths.
+Check constructed payload lengths/contents: its addData method can silently
+omit data when the 31-byte limit is exceeded. Verify actual over-the-air payloads
+and old/new discovery on both phone platforms; source-level size arithmetic is
+insufficient.
+
+An invitation supplies G, so the joining app derives its expected hint before
+connecting. An enrolled app uses pinned G. Owner first claim selects the hint
+recorded with provisioning recovery material, then may fetch G via DISCOVER
+and disconnect before collecting code/OS authentication. The selected hint/G
+is provisional until mutual AUTH2 proves the derived admin credential.
+
+For an action, scan by the existing service UUID; prefer a recently observed
+cached locator consistent with the expected hint, then matching hints. Cached
+iOS peripheral IDs/Android addresses are routing hints only and may change.
+Do not connect to an advertisement with an explicitly different hint.
+If hint data is absent, try at most three service candidates in total within
+the R7 operation deadline, cached locator first; never cycle indefinitely.
+Before authentication or enrollment, DISCOVER and compare full G with the
+expected value (except the explicitly selected first-claim discovery above).
+On mismatch disconnect immediately, exclude that candidate for this action and
+try another while time remains. On failed gate proof disconnect and report
+verification failure; do not send PED, downgrade or silently enroll.
+
+A discovery-only probe has a 3000 ms cap from connect attempt, disconnecting
+after G is obtained. Do not leave the neighbour's connection occupied while the
+user picks a row. Hints/collisions and missing advertisements can affect
+availability, but can never replace the existing cryptographic gate check.
+
 ## Acceptance and remaining verification
 
-R1-R7 are requirements, not claims of completed implementation or testing.
+R1-R8 are requirements, not claims of completed implementation or testing.
 
 - D1-D9: accepted, with D9's numeric timing bounds provisional until tested.
-- C1-C9: finalized wire, crypto, transport, storage and provisioning contract.
+- C1-C9/C11: wire, crypto, transport, storage, provisioning and discovery contract.
+  The reviewed C5 correction removes global V2 backoff without changing tags.
   Any interoperability change requires an explicit contract/version review.
 - Firmware plus minimal real iOS/Android transport proof precedes full admin UI.
   A laptop-only bench client cannot establish mobile compatibility.
+- R7/R8 add required screen/recovery, pilot-deployment and measured hardware
+  stress gates. Physical stress testing remains NOT RUN.
 - Each requirement maps to named tests and fault injection in the firmware plan.
   Updated vector results, builds, cross-platform results and hardware evidence
   must be recorded with versions and dates; no fixed test count stands for coverage.
@@ -973,6 +1241,13 @@ R1-R7 are requirements, not claims of completed implementation or testing.
 - [Bluetooth SIG Security and Privacy Best Practices](https://www.bluetooth.com/download/bluetooth-security-and-privacy-best-practices-guide/): integrity, authenticated pairing, relay attacks and availability limits.
 - [Espressif NVS documentation](https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-reference/storage/nvs_flash.html): power-loss resilience and physical tampering limits do not define application recovery policy.
 - [ESP-IDF 4.4 flash concurrency](https://docs.espressif.com/projects/esp-idf/en/release-v4.4/esp32/api-reference/storage/spi_flash_concurrency.html): flash operations can block other CPU work; measure timing.
+- [Apple TestFlight overview](https://developer.apple.com/help/app-store-connect/test-a-beta-version/testflight-overview/): beta build expiry and distribution prerequisites.
+- [Android app signing](https://developer.android.com/studio/publish/app-signing): signed packages and update-signing continuity.
+
+The PR-comment correction also inspected the installed BLEAdvertising source:
+custom raw advertisement/scan-response APIs exist and addData silently skips
+oversized payloads. C11's byte budgets were checked arithmetically; emitted
+advertisements and R8's physical stress matrix remain NOT RUN.
 
 The 2026-11-22 read-only source check also inspected the local pinned platform
 manifest, Preferences/NVS error handling, Arduino startup erase path, default
