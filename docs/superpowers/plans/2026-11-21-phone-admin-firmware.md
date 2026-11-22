@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or superpowers:executing-plans when implementation is explicitly authorized. Steps use checkbox syntax for tracking. This document does not authorize execution.
 
-Status: conditional plan for owner review; no implementation or bench testing performed
+Status: protocol finalized; implementation and bench testing not authorized or performed
 Created: 2026-11-21
 Revised: 2026-11-22
 
@@ -16,13 +16,15 @@ bounded work; one owner serializes authorization and persistence. New clients
 use mutually authenticated sessions and authenticated requests/replies. Legacy
 clients retain a deliberately restricted migration path.
 
-**Tech Stack:** PlatformIO/Arduino ESP32, mbedTLS, Preferences/NVS, C++ with Unity
-native tests, TypeScript with Node crypto and node:test for independent vectors,
-existing Kotlin/Swift clients for early real-device proof. Pin actual framework
-and provider versions in Task 0; the current espressif32 dependency is unpinned.
+**Tech Stack:** platformio/espressif32 7.0.1, framework-arduinoespressif32
+3.20017.241212+sha.dcc1105b, bundled mbedTLS 2.28.7, native NVS C APIs, C++/Unity,
+Node 22.22.1 TypeScript crypto/fixtures, existing Kotlin/Swift client probes.
+These are the inspected local baseline pinned by spec C8 for future implementation;
+no package installation, configuration change or clean build occurred in this PR.
 
 **Spec:** [Phone admin design](../specs/2026-11-21-phone-admin-design.md), revision
-2026-11-22, requirements R1-R7 and proposed decisions D1-D9.
+2026-11-22, accepted decisions D1-D9, requirements R1-R7, normative contract
+C1-C9 and synthetic examples C10. D9 numeric tolerance remains provisional.
 
 This replaces the earlier seven-task plan and its 59-test promise. The previous
 crypto literals describe an obsolete proposal except the unchanged legacy
@@ -30,11 +32,11 @@ algorithm. Do not implement old message rules from PR history.
 
 ## Authorization and sequence
 
-Current authorization covers only this spec/plan revision in PR #1. All boxes
-remain unchecked. The owner first reviews D1-D9. Task 0 then freezes the byte
-contract and execution details in these same canonical documents. Code requires
-a separate explicit implementation instruction; neither PR merge nor design
-approval grants it.
+Current authorization covers only finalizing protocol documentation in PR #1.
+D1-D9 are accepted, with D9 numeric timing tolerance provisional until tested.
+Task 0 records completed documentation work; every implementation task remains
+unchecked. Code requires a separate explicit instruction; PR merge and design
+approval do not authorize implementation, firmware flashing or gate operation.
 
 This remains the firmware plan, with a narrow early mobile compatibility proof.
 Detailed iOS and Android product plans follow that proof, before full admin UI.
@@ -51,7 +53,7 @@ points, not the final onboarding screens. Its future file scope is named below.
   sessions never grant admin access. Raw PED/TRIGGER cannot use new-session auth.
 - Every new mutation/pulse requires a verified request envelope; every trusted
   response requires a verified reply bound to the exact request.
-- New protocol version is 2; proposed setup KDF suite 1 uses 10,000 rounds.
+- New protocol version is 2; setup KDF suite 1 uses 10,000 rounds.
   Do not tune a released KDF silently. Setup/gate ID are each 16 random bytes.
 - Keys/tags are 32 bytes; invitation secret and random nonces 16 bytes; phone ID
   4 bytes. Names valid UTF-8, 1-24 bytes, no control characters.
@@ -59,7 +61,7 @@ points, not the final onboarding screens. Its future file scope is named below.
   600, 86400, 604800 seconds. Use 64-bit monotonic uptime.
 - Framing must support 20-byte write payloads, 512-byte reassembled messages,
   one outstanding request and a 5 second assembly deadline.
-- Proposed session duration 30 seconds, unauthenticated connection deadline
+- Session duration 30 seconds, unauthenticated connection deadline
   15 seconds, hard connection cap 60 seconds, auth backoff 15 seconds across
   reconnects within one boot; preserve the existing 60 second idle safeguard.
 - Installed storage/crypto failures lock electronic commands. No implicit
@@ -99,9 +101,9 @@ These are future implementation paths, not files created by this docs-only PR.
 | lib/gate_core/gate_store.h/.cpp | Snapshot validation, atomic enrollment, persistent policy |
 | lib/gate_core/gate_protocol.h/.cpp | Explicit roles, sessions, requests and reply correlation |
 | lib/gate_core/gate_transport.h/.cpp | Bounded framing/reassembly |
-| src/nvs_backend.h/.cpp | Preferences adapter and precise failure classification |
+| src/nvs_backend.h/.cpp | Native ESP-IDF NVS adapter, gatecfg partition and C7 failure classification |
 | src/main.cpp, include/app_config.h, include/app_config_local.example.h | Queue integration, relay arbitration, provisioning profiles/config |
-| platformio.ini | Pinned target and native test environment |
+| platformio.ini, partitions.csv | Pinned target/native tests and C8 partition layout preserving firmware offsets |
 | test/support/test_support.h | Fault-injecting backend, fake clock and deterministic random source |
 | test/test_crypto/test_main.cpp, test/test_store/test_main.cpp | Crypto/store tests |
 | test/test_protocol/test_main.cpp, test/test_transport/test_main.cpp, test/test_scheduler/test_main.cpp | Protocol/transport/scheduling tests |
@@ -114,42 +116,33 @@ tests plus native phone probes. This follows the repository language preference
 and makes real mobile interoperability a prerequisite. A standalone laptop BLE
 client is optional follow-up tooling, not a release dependency.
 
-## Task 0: Ratify defaults and freeze the protocol contract
+## Task 0: Finalize the protocol documents (completed, docs only)
 
 **Files:** this plan and the linked spec only.
-**Consumes:** owner decisions D1-D9, existing firmware/app BLE behavior.
-**Produces:** a reviewed byte contract embedded in spec R1/R2/R5 and exact
-interfaces below refined as needed; no product code.
+**Consumes:** owner's acceptance of D1-D9 on 2026-11-22, with D9 timing
+provisional; read-only inspection of current firmware/provider sources.
+**Produces:** exact C1-C9 contract and synthetic examples C10. This is design
+completion, not production implementation or validation.
 
-- [ ] Record the owner's decision for each D1-D9, without retroactively labeling
-  proposals approved. Retain alternative/tradeoff notes.
-- [ ] Freeze exact message schemas, lengths, field order, integer encoding,
-  domain labels and canonicalization for every R1 proof/key and every R2
-  operation. Bind claims to a single supported routine-replacement mode; local
-  compromise recovery is not a remotely selectable claim mode.
-- [ ] Freeze STATE discovery fields, mutual-auth exchange and key confirmation,
-  session ID/sequence widths, request IDs, error receipts and authenticated reply
-  payloads. Define bounded uncertain-enrollment candidate retention and retry
-  resolution; an untrusted unknown must not destroy the last usable key.
-- [ ] Freeze the 20-byte frame layout, response chunk/offset reads, assembly
-  timeout, exact duplicate-fragment rules, pending/busy responses and queue-full
-  behavior. Document maximal encoded request/reply lengths <=512 bytes. Ensure
-  frame metadata leaves actual payload room at minimum MTU.
-- [ ] Freeze load/commit classification and NVS snapshot serialization/version/
-  integrity check. Specify how definitely-uncommitted vs indeterminate writes
-  are established; uncertain outcomes lock and reload.
-- [ ] Pin the PlatformIO platform/framework version after checking compatibility
-  with the current build, mbedTLS/Preferences APIs and BLE handles. Specify Node
-  runtime and exact test commands (proposed Node >=22.18 with TypeScript stripping).
-- [ ] Review the complete contract for active proxy, replay, downgrade, recovery
-  and false-success paths. Resolve findings before vectors/production code.
-- [ ] Commit the approved contract changes; obtain explicit implementation
-  authorization if not already given. Do not start Task 1 merely because this
-  task's document review passed.
+- [x] Record D1-D9 acceptance, readability/privacy tradeoff and D9 qualification.
+- [x] Freeze binary field order, big-endian widths, F/M domain encoding, KDF,
+  proof/key/receipt inputs and mutually authenticated session messages (C1-C3).
+- [x] Freeze command permissions/arguments/results, error precedence, counters,
+  correlation, replay behavior and credential retention (C4-C5).
+- [x] Freeze minimum-MTU frame/reply layouts, bounds, timers, duplicates and
+  queued/in-flight work behavior (C6).
+- [x] Freeze single-snapshot schema, precise NVS error classification,
+  provisioning/installed behavior and partition layout (C7-C8).
+- [x] Pin inspected toolchain/provider baseline and invitation format (C8-C9).
+- [x] Check synthetic examples/byte counts via temporary TypeScript and OpenSSL
+  CLI calculations; include results and verification limits in C10.
+- [x] Perform a builder check of the written contract and incorporate material
+  findings before publishing the document revision.
 
-Exit: no builder-selected wire format, unreviewed security choice or incompatible
-cross-platform assumption remains. If a decision is unresolved, the dependent
-task stays pending; unrelated documentation may continue.
+Exit: the contract is ready for implementation review, with D9 physical limits
+explicitly provisional. Do not execute Task 1 without a new explicit request.
+Future clean builds, native/mobile fixtures, BLE and physical checks remain
+unchecked; document arithmetic checks do not satisfy those gates.
 
 ## Task 1: Independent reference and crypto fixtures
 
@@ -158,7 +151,8 @@ tools/gen_vectors.ts, tools/gate_protocol.test.ts, docs/test-vectors.json;
 lib/gate_core/crypto_primitives.h and both backends; gate_crypto.h/.cpp;
 test/test_crypto/test_main.cpp; platformio.ini.
 
-**Interfaces:** TypeScript exports deriveSetupKey, deriveAdminKey,
+**Interfaces:** Implement the exact C1-C9 contract, not configurable serializers.
+TypeScript exports deriveSetupKey, deriveAdminKey,
 deriveInviteSecret, derivePhoneKey, claimProof, joinProof, authClientProof,
 authGateProof, deriveSessionKeys, commandTag, replyTag, enrollmentReceipt,
 encodeInvitation, decodeInvitation, legacyResponse. Each consumes the frozen
@@ -166,20 +160,20 @@ typed transcript/input and returns bytes or a structured validation error.
 C++ equivalents use fixed-size arrays and explicit success/failure, never
 zero-filled substitute keys. The spec is authoritative over either implementation.
 
-- [ ] Write failing fixture tests for every derivation, receipt, canonical
-  request/reply, full invitation and legacy response. Include tamper_binding:
+- [ ] Write failing fixture tests for C10 values and every C1-C9 derivation,
+  receipt, request/reply, invitation and unchanged legacy response. Include tamper_binding:
   change each bound field independently and reject the old proof.
-- [ ] Implement the TypeScript reference using Node crypto. Generate candidate
-  vectors, independently reproduce them with mbedTLS, then pin reviewed literals
-  in docs/test-vectors.json. Comparing a generator only to its own output is
-  insufficient.
+- [ ] Implement TypeScript with Node crypto using C1's F/M encoding. Reproduce
+  C10 via mbedTLS and add admin auth, all command/result variants and boundary
+  fixtures. Pin them in docs/test-vectors.json. C10's Node/OpenSSL CLI agreement
+  is not an independent engine check; mbedTLS/Kotlin/Swift verification remains
+  required. Comparing a generator only to its own output is insufficient.
 - [ ] Implement C++ provider wrappers and derivations against the pinned bytes.
   Cover crypto failure, constant-time tag comparison, invalid hex/Base32,
   invalid UTF-8, 24/25-byte names, version/checksum/padding mismatch and full
   66-character Base32 payload round-trip.
-- [ ] Run the frozen Node command (proposed:
-  node --experimental-strip-types --test tools/gate_crypto.test.ts tools/gate_protocol.test.ts)
-  and pio test -e native -f test_crypto. Expect every named fixture to pass;
+- [ ] Run node --experimental-strip-types --test tools/gate_crypto.test.ts tools/gate_protocol.test.ts
+  on Node 22.22.1, and pio test -e native -f test_crypto. Expect every named fixture to pass;
   build pio run -e esp32-usb-c-38pin to exercise the ESP32 provider.
 - [ ] Record provider/runtime versions and commit only synthetic fixtures/code.
 
@@ -193,11 +187,11 @@ test/support/test_support.h, test/test_store/test_main.cpp.
 
 **Interfaces:** StoreBackend.load returns Valid/Missing/Corrupt/Unsupported/
 IoFailure plus bytes; StoreBackend.commit returns Committed/NotCommitted/
-Indeterminate. GateStore.begin returns Ready/NeedsProvisioning/RecoveryRequired.
+Indeterminate exactly as C7 (including its no-fallback and recovery rules). GateStore.begin returns Ready/NeedsProvisioning/RecoveryRequired.
 GateStore.consumeInvite(id, candidateKey, nowMs), replaceAdmin(candidateKey,
 fingerprint), revoke(id), setLegacyEnabled(bool) return classified mutation
 results and new revision on success. Invites use 64-bit expiry; committed
-snapshot covers all persistent authorization fields in R4.
+snapshot uses C7's exact schema-2 bytes, SHA checksum and 1114-byte maximum.
 
 - [ ] Write failing store_failure_matrix tests for read errors, short blobs,
   bad checksum/version, duplicate IDs, impossible lengths and missing installed
@@ -209,8 +203,13 @@ snapshot covers all persistent authorization fields in R4.
   admin and generation, keeps joined phones/legacy policy, cancels all waiting
   codes, and invalidates old admin use.
 - [ ] Write commit-boundary tests for all persistent operations: failure before
-  commit preserves old state; success survives reload; uncertain result enters
-  recovery. No stale snapshot may restore revoked access after reported success.
+  nvs_set_blob is NotCommitted; any error after invoking it is Indeterminate;
+  only native commit success plus exact validated readback is Committed.
+  Uncertainty disables commands until C7 recovery; no older snapshot fallback
+  may restore revoked access after reported success.
+- [ ] Test that BLE reconnect cannot clear RecoveryRequired. Physical reboot
+  may load only the single valid stored snapshot; corruption stays locked and
+  requires local repair, never automatic reprovisioning.
 - [ ] Implement versioned snapshot validation and mutation staging. Keep RAM
   state unpublished until committed. Failed JOIN retains its invitation unless
   reboot occurs; committed JOIN reloads even if no success receipt was delivered.
@@ -231,19 +230,25 @@ lib/gate_core/gate_protocol.h/.cpp, test/test_transport/test_main.cpp,
 test/test_protocol/test_main.cpp.
 
 **Interfaces:** GateTransport.acceptFragment(connectionGeneration, bytes, now)
-returns Incomplete/Complete/Rejected; clearConnection drops assembly/replies.
+returns Incomplete/Complete/Rejected using C6's exact 11-byte header, 9-byte
+chunks and 8-byte SELECT writes; clearConnection drops assembly/replies.
 GateProtocol.onConnect/onDisconnect rotate challenge and clear privileges.
 GateProtocol.handle(message, now) returns a correlated reply and optional
 authorized effect. Explicit session roles: None, Legacy, Tenant, Admin.
 No callback decides authorization by reading the status string.
 
-- [ ] Write framing_matrix: 20-byte payloads, exact maximum/over-limit messages,
+- [ ] Write framing_matrix: C6's 20-byte frames, 512-byte assembly/57-frame limit,
   incomplete/duplicate/inconsistent/out-of-order fragments, total mismatch,
   5-second expiry and reconnect mid-message. No partial dispatch or allocation
   above the bounds. Reads must reconstruct the matching stable reply.
 - [ ] Write mutual-auth, role_and_gate_binding, stale_reply, replay and sequence
-  tests. An altered verb/argument/session/gate/role/version/direction or reply
+  tests against C2/C3/C5, including H/type bases, F label encoding and result codes. An altered verb/argument/session/gate/role/version/direction or reply
   must fail. Exact last-request retry returns cached result with no new effect.
+- [ ] Test exact cached CLAIM/JOIN/AUTH2 retries before challenge consumption:
+  no new key/write/nonce rotation or session extension. Test expired AUTH2 and
+  COMMAND caches through both SELECT and plain reads. Valid-MAC sequence gaps,
+  changed reused IDs and exhaustion must yield E0/REPLAY, end the session and
+  leave counters/effects unchanged; an exact final-sequence duplicate is cached.
 - [ ] Test legacy unchanged with AUTHRESP/PED/TRIGGER during migration; legacy
   cannot LIST/INVITE/REVOKE/LEGACY. New sessions cannot authorize raw PED/TRIGGER.
   Legacy-off denies even the correct old passphrase; errors never downgrade.
@@ -254,7 +259,7 @@ No callback decides authorization by reading the status string.
 - [ ] Test connection_deadlines: repeated reads cannot extend the 15-second
   unauthenticated deadline or 60-second hard cap; failure backoff survives
   reconnect within one boot. Confirm session expiry at 30 seconds.
-- [ ] Implement the frozen frame/session contract using Task 1 crypto and
+- [ ] Implement C1-C6 using Task 1 crypto and
   explicit role state; bound work and caches. Authentication failure clears
   privilege; unauthenticated status remains advisory.
 - [ ] Run pio test -e native -f test_transport and
@@ -268,7 +273,7 @@ discovery is deliberately distinct from authenticated state.
 **Files:** lib/gate_core/gate_protocol.h/.cpp,
 test/test_protocol/test_main.cpp; use Task 2 store interfaces.
 
-**Interfaces:** handle maps verified operations to consumeInvite, replaceAdmin,
+**Interfaces:** C4's exact six verbs and C5 results map to consumeInvite, replaceAdmin,
 revoke and setLegacyEnabled. Enrollment success produces a candidate-key receipt,
 not an implicitly authorized session. Pending/failed storage is not OK.
 
@@ -290,13 +295,14 @@ Exit: R2/R3 effects and R4 durability hold for both success and uncertain outcom
 
 ## Task 5: ESP32 integration and relay scheduling
 
-**Files:** src/main.cpp, src/nvs_backend.h/.cpp, platformio.ini,
+**Files:** src/main.cpp, src/nvs_backend.h/.cpp, platformio.ini, partitions.csv,
 include/app_config.h, include/app_config_local.example.h,
 test/test_scheduler/test_main.cpp; root README.md/AGENTS.md/CLAUDE.md and
 docs/architecture.md as runtime behavior is implemented.
 
-**Interfaces:** NvsBackend implements Task 2 classifications, checking namespace
-open/length/read/write results and readback/validation as frozen in Task 0.
+**Interfaces:** NvsBackend uses native nvs_flash_init_partition, nvs_open_from_partition,
+nvs_get_blob, nvs_set_blob and nvs_commit against gatecfg/d5gate/state. Implement
+C7 classifications and exact readback, never Preferences' ambiguous size-only result.
 A bounded command queue carries connection generation and original deadline.
 One owner serializes protocol/store access. Reply reads obtain an immutable
 snapshot for a request; asynchronous PENDING cannot expose a previous OK.
@@ -305,13 +311,17 @@ snapshot for a request; asynchronous PENDING cannot expose a previous OK.
   starts during a pulse; full queue rejects safely; reconnect/expiry cancels old
   work; no pulse is retained for later execution. Test millis rollover at the
   existing cooldown boundary as well as 64-bit protocol time.
-- [ ] Add explicit Bench/Provisioning/Installed configuration, setup secret and
-  gate ID placeholders, reply characteristic, bounded queue and status adapter.
-  Check BLE service handle capacity with the pinned framework. Set relay idle
+- [ ] Add C8's explicit Bench/Provisioning/Installed profiles, partitions.csv,
+  setup secret/gate ID placeholders, reply characteristic, bounded queue and
+  status adapter. Use the explicit 24-handle BLE service budget. Set relay idle
   before KDF, store initialization or advertising; failures enter recovery.
-- [ ] Implement NVS classification and installed-mode startup. Check ESP32 core
-  startup behavior for automatic NVS erase/reinitialization; do not depend on
-  erased marker state to authorize fresh provisioning.
+- [ ] Implement C7/C8 startup. Default nvs must remain the first NVS partition;
+  the inspected core can erase it on initialization failure. Credentials reside
+  only in separately initialized gatecfg. Never erase/reinitialize gatecfg after
+  an error in Installed mode. Before a future flash, verify 4 MB layout and no
+  existing SPIFFS user data; a mismatch blocks upload. Provisioning disables
+  relay commands, initializes only empty state, and is replaced by Installed
+  firmware before use.
 - [ ] Integrate onConnect/onDisconnect/activity deadlines and synchronized
   read replies. Remove raw command/proof logging. Time KDF without printing
   inputs; do not lower rounds automatically if slow.
@@ -406,7 +416,7 @@ and NO connection from relay contacts to the live D5-Evo.
 **Files:** docs/architecture.md, root/app README.md/AGENTS.md/CLAUDE.md as
 applicable; future iOS and Android plans under docs/superpowers/plans/.
 
-- [ ] Audit implementation and tests against R1-R7 and ratified D1-D9. Record
+- [ ] Audit implementation and tests against R1-R7, C1-C10 and accepted D1-D9. Record
   any incomplete requirements instead of declaring completion from green builds.
 - [ ] Document exact provisioning -> installed workflow, backup/recovery,
   legacy cutover/re-enable warning, upgrade/schema compatibility, no rollback
@@ -423,10 +433,11 @@ applicable; future iOS and Android plans under docs/superpowers/plans/.
 
 ## Current review status
 
-- No tasks executed, no product files changed, no hardware tests performed.
-- D1-D9 are proposed defaults awaiting review.
-- Task 0's exact contract is still a prerequisite, not an invitation for each
-  implementer to invent protocol details independently.
-- The next action after this docs-only PR update is owner review of the defaults,
-  followed by contract finalization within the agreed scope. Implementation
-  requires a separate explicit request.
+- Task 0 documents finalized; no firmware/app implementation or bench test run.
+- D1-D9 accepted; D9 numeric tolerances remain provisional until tested and
+  confirmed by the owner. Readable labels/activity are accepted for V1.
+- C1-C9 define the contract; C10 provides synthetic examples checked through
+  Node/OpenSSL CLI paths, not independent platform or hardware certification.
+- Tasks 1-8 remain unchecked and require separate implementation authorization.
+- No fresh decision about framing, crypto concatenation, error schemas,
+  provisioning or storage is delegated to individual implementers.
